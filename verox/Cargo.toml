@@ -3,4 +3,15 @@ name = "verox"
 version = "0.1.0"
 edition = "2024"
 
+ethers = { version = "2", features = ["keystore", "wallet"] }
+aes-gcm = "0.10"
+rand = "0.8"
+sha2 = "0.10"
+argon2 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["fs", "macros"] }
+clap = { version = "4", features = ["derive"] }
+
 [dependencies]
+clap = "4.5.43"
