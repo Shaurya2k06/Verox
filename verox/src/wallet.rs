@@ -3,6 +3,7 @@ use ethers::core::k256::SecretKey;
 use rand::thread_rng;
 use std::fs;
 use std::io::{self, Write};
+use serde_json::json;
 
 pub fn init_wallet() {
     println!("Generating a new Ethereum wallet...");
@@ -10,12 +11,11 @@ pub fn init_wallet() {
     let mut rng = thread_rng();
     let secret = SecretKey::random(&mut rng);
     let wallet = LocalWallet::from(secret);
-
     let address = wallet.address();
     let private_key_hex = format!("0x{}", hex::encode(wallet.signer().to_bytes()));
 
-    println!("New wallet created!");
-    println!("Address: {:?}", address);
+    println!("Wallet created!");
+    println!("Address: {}", address);
     println!("Private Key: {}", private_key_hex);
 
     print!("Enter passphrase to encrypt wallet: ");
@@ -24,16 +24,15 @@ pub fn init_wallet() {
     io::stdin().read_line(&mut passphrase).unwrap();
     let passphrase = passphrase.trim();
 
-    let keystore = serde_json::json!({
-        "address": format!("{:?}", address),
+    let keystore = json!({
+        "address": address.to_string(),
         "private_key": private_key_hex,
     });
 
-    let json = serde_json::to_string_pretty(&keystore).unwrap();
-    let encrypted_json = encrypt_keystore(json.as_bytes(), passphrase.as_bytes());
+    let keystore_json = serde_json::to_string_pretty(&keystore).unwrap();
+    let encrypted_json = encrypt_keystore(keystore_json.as_bytes(), passphrase.as_bytes());
 
     fs::create_dir_all("keystore").unwrap();
-
     let filename = format!("keystore/{}.json", address);
     fs::write(&filename, encrypted_json).unwrap();
 

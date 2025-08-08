@@ -1,8 +1,12 @@
 use clap::Command;
-pub struct Cli{}
+use crate::wallet::unlock_wallet;
+
+
+pub struct Cli;
+
 impl Cli {
     pub fn new() -> Self {
-        Cli{}
+        Cli
     }
 
     pub fn run(&self) {
@@ -16,13 +20,13 @@ impl Cli {
 
         match matches.subcommand_name() {
             Some("init") => {
-                println!("Initializing wallet")
+                crate::wallet::init_wallet();
             }
             Some("unlock") => {
-                println!("Unlocking wallet")
+                crate::wallet::unlock_wallet();
             }
             _ => {
-                println!("Type --help for a list of availablee commands");
+                println!("Type --help for a list of available commands");
             }
         }
     }

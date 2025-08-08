@@ -1,14 +1,11 @@
-use crate::cli::Cli;
-
 mod cli;
 mod wallet;
 mod crypto;
 mod biometric;
-mod utils;
 mod types;
+mod utils;
 
 fn main() {
-    println!("Welcome to Verox!");
-        let cli = Cli::new();
-        cli.run();
+    let cli = cli::Cli::new();
+    cli.run();
 }
