@@ -5,7 +5,8 @@ mod biometric;
 mod types;
 mod utils;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = cli::Cli::new();
-    cli.run();
+    cli.run().await;
 }

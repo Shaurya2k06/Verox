@@ -1,32 +1,49 @@
-use clap::Command;
-use crate::wallet::unlock_wallet;
+use clap::{Parser, Subcommand};
 
+use crate::wallet;
+use crate::biometric;
 
-pub struct Cli;
+/// Command-line interface for Verox
+#[derive(Parser, Debug)]
+#[command(name = "Verox")]
+#[command(about = "Biometric Wallet Locker CLI", long_about = None)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Create a new wallet
+    CreateWallet {
+        /// Optional passphrase for extra security
+        #[arg(short, long)]
+        passphrase: Option<String>,
+    },
+    /// Unlock an existing wallet
+    UnlockWallet {
+        /// Path to wallet file
+        #[arg(short, long)]
+        file: String,
+    },
+}
 
 impl Cli {
+    /// Creates a new CLI parser from arguments
     pub fn new() -> Self {
-        Cli
+        Cli::parse()
     }
 
-    pub fn run(&self) {
-        let matches = Command::new("Verox")
-            .version("0.1.0")
-            .author("Shaurya Srivastava")
-            .about("Biometric Wallet Locker")
-            .subcommand(Command::new("init").about("Initialize a new wallet"))
-            .subcommand(Command::new("unlock").about("Unlock the Wallet"))
-            .get_matches();
-
-        match matches.subcommand_name() {
-            Some("init") => {
-                crate::wallet::init_wallet();
+    /// Runs the CLI commands asynchronously
+    pub async fn run(&self) {
+        match &self.command {
+            Commands::CreateWallet { passphrase } => {
+                println!("🔐 Creating wallet...");
+                wallet::create(passphrase.clone()).await;
             }
-            Some("unlock") => {
-                crate::wallet::unlock_wallet();
-            }
-            _ => {
-                println!("Type --help for a list of available commands");
+            Commands::UnlockWallet { file } => {
+                println!("🔓 Unlocking wallet at: {}", file);
+                wallet::unlock(file).await;
             }
         }
     }

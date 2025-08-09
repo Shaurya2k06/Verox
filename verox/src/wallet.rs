@@ -7,7 +7,9 @@ use std::path::Path;
 use hex;
 use base64::{engine::general_purpose, Engine as _};
 use rpassword::read_password;
+use serde_json::json;
 
+/// Generate and store a new Ethereum wallet
 pub fn init_wallet() {
     println!("Generating a new Ethereum wallet...");
 
@@ -28,7 +30,7 @@ pub fn init_wallet() {
     io::stdin().read_line(&mut passphrase).unwrap();
     let passphrase = passphrase.trim();
 
-    let keystore = serde_json::json!({
+    let keystore = json!({
         "address": format!("{:?}", address),
         "private_key": private_key_hex,
     });
@@ -37,40 +39,74 @@ pub fn init_wallet() {
     let encrypted_json = encrypt_keystore(json.as_bytes(), passphrase.as_bytes());
 
     fs::create_dir_all("keystore").unwrap();
-    let filename = format!("keystore/{}.dat", address); // consistent format
+    let filename = format!("keystore/{}.dat", address);
     fs::write(&filename, encrypted_json).unwrap();
 
     println!("Keystore saved to: {}", filename);
 }
 
+/// Very simple "encryption" — replace with AES or similar later
 fn encrypt_keystore(data: &[u8], _passphrase: &[u8]) -> Vec<u8> {
     general_purpose::STANDARD.encode(data).as_bytes().to_vec()
 }
 
+/// Very simple "decryption" — replace with AES or similar later
 fn decrypt_keystore(data: &[u8], _passphrase: &[u8]) -> Vec<u8> {
-    general_purpose::STANDARD.decode(data).expect("Failed to decode keystore")
+    general_purpose::STANDARD
+        .decode(data)
+        .expect("Failed to decode base64")
 }
 
+/// Unlock and load the wallet
 pub fn unlock_wallet() {
-    // You can later add option to select wallet file from keystore dir
-    let wallet_path = Path::new("keystore").read_dir()
-        .expect("Keystore directory not found")
-        .next()
-        .expect("No wallet found in keystore")
-        .expect("Failed to read wallet file")
-        .path();
+    let keystore_dir = Path::new("keystore");
 
-    println!("Enter passphrase to unlock wallet: ");
+    if !keystore_dir.exists() {
+        eprintln!("No keystore directory found. Run `verox init` first.");
+        return;
+    }
+
+    // Find the first `.dat` file in the keystore folder
+    let wallet_file = match fs::read_dir(keystore_dir)
+        .expect("Failed to read keystore directory")
+        .find_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension()?.to_str()? == "dat" {
+                Some(path)
+            } else {
+                None
+            }
+        })
+    {
+        Some(path) => path,
+        None => {
+            eprintln!("No wallet file found in keystore directory.");
+            return;
+        }
+    };
+
+    print!("Enter passphrase: ");
+    io::stdout().flush().unwrap();
     let passphrase = read_password().expect("Failed to read passphrase");
 
-    let encrypted_data = fs::read(&wallet_path).expect("Failed to read wallet file");
+    let encrypted_data = fs::read(&wallet_file).expect("Failed to read wallet file");
     let decrypted_bytes = decrypt_keystore(&encrypted_data, passphrase.as_bytes());
 
-    let json_str = String::from_utf8(decrypted_bytes).expect("Invalid UTF-8 in decrypted wallet");
-    let keystore: serde_json::Value = serde_json::from_str(&json_str).expect("Invalid JSON in keystore");
+    let keystore_json = String::from_utf8(decrypted_bytes)
+        .expect("Invalid UTF-8 in decrypted wallet");
 
-    let private_key_hex = keystore["private_key"].as_str().expect("Missing private key");
-    let wallet: LocalWallet = private_key_hex.parse().expect("Failed to parse private key");
+    // Parse JSON and load private key
+    let parsed: serde_json::Value =
+        serde_json::from_str(&keystore_json).expect("Invalid keystore JSON format");
+
+    let private_key_hex = parsed["private_key"]
+        .as_str()
+        .expect("Private key missing in keystore");
+
+    let wallet: LocalWallet = private_key_hex
+        .parse()
+        .expect("Failed to parse private key");
 
     println!("Wallet unlocked successfully!");
     println!("Address: {:?}", wallet.address());
