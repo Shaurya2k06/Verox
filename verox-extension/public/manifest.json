@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Verox Wallet",
+  "version": "0.1.0",
+  "description": "Ethereum wallet with WebAuthn biometric unlock (WASM Rust backend).",
+  "action": {
+    "default_popup": "src/extension/popup/index.html",
+    "default_title": "Verox Wallet"
+  },
+  "background": {
+    "service_worker": "src/extension/background.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+  "js": ["src/extension/content.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["wasm/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
