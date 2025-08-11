@@ -24,8 +24,12 @@ pub enum Commands {
     UnlockWallet {
         /// Path to wallet file
         #[arg(short, long)]
-        file: String,
+        file: Option<String>,
     },
+    /// Register biometric authentication (Touch ID)
+    RegisterBiometric,
+    /// Test biometric verification
+    VerifyBiometric,
 }
 
 impl Cli {
@@ -34,16 +38,43 @@ impl Cli {
         Cli::parse()
     }
 
-    /// Runs the CLI commands asynchronously
-    pub async fn run(&self) {
+    /// Runs the CLI commands
+    pub fn run(&self) {
         match &self.command {
-            Commands::CreateWallet { passphrase } => {
+            Commands::CreateWallet { passphrase: _ } => {
                 println!("🔐 Creating wallet...");
-                wallet::create(passphrase.clone()).await;
+                wallet::init_wallet();
             }
-            Commands::UnlockWallet { file } => {
-                println!("🔓 Unlocking wallet at: {}", file);
-                wallet::unlock(file).await;
+            Commands::UnlockWallet { file: _ } => {
+                println!("🔓 Unlocking wallet...");
+                // First try biometric verification
+                match biometric::verify() {
+                    Ok(true) => {
+                        println!("✅ Biometric verification successful, unlocking wallet...");
+                        wallet::unlock_wallet();
+                    }
+                    Ok(false) => {
+                        println!("❌ Biometric verification failed");
+                    }
+                    Err(e) => {
+                        println!("⚠️  Biometric verification error: {}", e);
+                        println!("Falling back to manual unlock...");
+                        wallet::unlock_wallet();
+                    }
+                }
+            }
+            Commands::RegisterBiometric => {
+                match biometric::register() {
+                    Ok(_) => println!("✅ Biometric authentication registered successfully!"),
+                    Err(e) => println!("❌ Failed to register biometric authentication: {}", e),
+                }
+            }
+            Commands::VerifyBiometric => {
+                match biometric::verify() {
+                    Ok(true) => println!("✅ Biometric verification successful!"),
+                    Ok(false) => println!("❌ Biometric verification failed"),
+                    Err(e) => println!("⚠️  Biometric verification error: {}", e),
+                }
             }
         }
     }

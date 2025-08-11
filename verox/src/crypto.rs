@@ -1,4 +1,4 @@
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use aes_gcm::aead::{Aead, KeyInit};
 use argon2::Argon2;
 use rand::rngs::OsRng;
@@ -25,7 +25,7 @@ pub fn encrypt_keystore(data: &[u8], passphrase: &[u8]) -> Vec<u8> {
         .expect("Argon2 hashing failed");
 
     // 3) create AES-GCM cipher
-    let cipher = Aes256Gcm::new(Key::from_slice(&key));
+    let cipher = Aes256Gcm::new(&key.into());
 
     // 4) generate nonce
     let mut nonce_bytes = [0u8; 12];
@@ -68,7 +68,7 @@ pub fn decrypt_keystore(encoded: &[u8], passphrase: &[u8]) -> Vec<u8> {
         .hash_password_into(passphrase, salt, &mut key)
         .expect("Argon2 hashing failed");
 
-    let cipher = Aes256Gcm::new(Key::from_slice(&key));
+    let cipher = Aes256Gcm::new(&key.into());
     let nonce = Nonce::from_slice(nonce_bytes);
 
     // decrypt
