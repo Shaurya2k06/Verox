@@ -1,14 +1,23 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
+import { resolve } from 'path'
 import webExtension from 'vite-plugin-web-extension'
-import path from 'path'
 
-// https://vite.dev/config/
+// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), webExtension({ manifest: 'public/manifest.json' })],
+  plugins: [
+    react(),
+    webExtension({
+      disableAutoLaunch: true,
+      manifest: () => import('./manifest.json').then(module => module.default),
+    }),
+  ],
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: {
+      "@": resolve(__dirname, "./src"),
+    },
   },
-  build: {}
+  define: {
+    'process.env': process.env
+  }
 })
