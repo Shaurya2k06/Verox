@@ -1,7 +1,12 @@
-//! macOS Touch ID Biometric Authentication Module
+//! Cross-Platform Biometric Authentication Module
 //! 
-//! This module provides Touch ID authentication using macOS LocalAuthentication framework
-//! and securely stores keys in the macOS Keychain.
+//! This module provides biometric authentication for multiple platforms:
+//! - macOS: Touch ID using LocalAuthentication framework + Keychain storage
+//! - Windows: Windows Hello using Credential Manager
+//! - Web: WebAuthn for browser-based authentication
+//!
+//! The module automatically detects the current platform and uses the appropriate
+//! biometric authentication method.
 
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -11,6 +16,9 @@ use std::ffi::{CStr, CString};
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::os::raw::{c_char, c_int};
+
+#[cfg(target_os = "windows")]
+mod windows_hello;
 
 #[cfg(target_os = "macos")]
 const SECRET_DATA: &str = "verox_biometric_authenticated_secret_key_v2";
@@ -127,7 +135,8 @@ fn delete_secret_from_keychain() -> Result<(), String> {
         Ok(())
     }
 }
-/// This prompts the user for Touch ID and stores a secret key in Keychain
+/// Register biometric authentication for the current platform
+/// This prompts the user for biometric authentication and stores a secret securely
 pub fn register() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -164,15 +173,20 @@ pub fn register() -> Result<(), String> {
             }
         }
     }
-    
-    #[cfg(not(target_os = "macos"))]
+
+    #[cfg(target_os = "windows")]
     {
-        Err("Biometric authentication is only supported on macOS".to_string())
+        windows_hello::register()
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("Biometric authentication is only supported on macOS and Windows".to_string())
     }
 }
 
-/// Verify biometric authentication with Touch ID
-/// This prompts for Touch ID and validates the stored secret
+/// Verify biometric authentication for the current platform
+/// This prompts for biometric authentication and validates the stored secret
 pub fn verify() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
@@ -226,27 +240,81 @@ pub fn verify() -> Result<bool, String> {
             }
         }
     }
-    
-    #[cfg(not(target_os = "macos"))]
+
+    #[cfg(target_os = "windows")]
     {
-        Err("Biometric authentication is only supported on macOS".to_string())
+        windows_hello::verify()
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("Biometric authentication is only supported on macOS and Windows".to_string())
     }
 }
 
-/// Clean up - remove biometric registration
+/// Clean up - remove biometric registration for the current platform
 #[allow(dead_code)]
 pub fn unregister() -> Result<(), String> {
-    println!("Removing biometric authentication...");
+    #[cfg(target_os = "macos")]
+    {
+        println!("Removing Touch ID registration...");
+        
+        match delete_secret_from_keychain() {
+            Ok(_) => {
+                println!("Touch ID registration removed successfully!");
+                Ok(())
+            }
+            Err(e) => {
+                println!("Failed to remove Touch ID registration: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows_hello::unregister()
+    }
     
-    match delete_secret_from_keychain() {
-        Ok(_) => {
-            println!("Biometric authentication removed successfully");
-            Ok(())
-        }
-        Err(_) => {
-            println!("No biometric authentication was registered");
-            Ok(())
-        }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("Biometric authentication is only supported on macOS and Windows".to_string())
+    }
+}
+
+/// Check if biometric authentication is available on the current platform
+pub fn is_available() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        can_evaluate_touch_id()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows_hello::can_evaluate_windows_hello()
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(false)
+    }
+}
+
+/// Get the name of the biometric authentication method for the current platform
+pub fn get_biometric_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Touch ID"
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        "Windows Hello"
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "Biometric Authentication"
     }
 }
 

@@ -26,7 +26,7 @@ pub enum Commands {
         #[arg(short, long)]
         file: Option<String>,
     },
-    /// Register biometric authentication (Touch ID)
+    /// Register biometric authentication (Touch ID/Windows Hello)
     RegisterBiometric,
     /// Test biometric verification
     VerifyBiometric,
@@ -64,16 +64,20 @@ impl Cli {
                 }
             }
             Commands::RegisterBiometric => {
+                let biometric_name = biometric::get_biometric_name();
+                println!("🔐 Setting up {} authentication...", biometric_name);
                 match biometric::register() {
-                    Ok(_) => println!("✅ Biometric authentication registered successfully!"),
-                    Err(e) => println!("❌ Failed to register biometric authentication: {}", e),
+                    Ok(_) => println!("✅ {} authentication registered successfully!", biometric_name),
+                    Err(e) => println!("❌ Failed to register {} authentication: {}", biometric_name, e),
                 }
             }
             Commands::VerifyBiometric => {
+                let biometric_name = biometric::get_biometric_name();
+                println!("🔓 Testing {} authentication...", biometric_name);
                 match biometric::verify() {
-                    Ok(true) => println!("✅ Biometric verification successful!"),
-                    Ok(false) => println!("❌ Biometric verification failed"),
-                    Err(e) => println!("⚠️  Biometric verification error: {}", e),
+                    Ok(true) => println!("✅ {} verification successful!", biometric_name),
+                    Ok(false) => println!("❌ {} verification failed", biometric_name),
+                    Err(e) => println!("⚠️  {} verification error: {}", biometric_name, e),
                 }
             }
         }
