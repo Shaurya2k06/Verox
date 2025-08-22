@@ -1,59 +1,34 @@
-import React, { useState, useEffect } from 'react'
-import { WalletSetup } from './components/WalletSetup'
-import { WalletDashboard } from './components/WalletDashboard'
+import { useState } from 'react'
+import reactLogo from './assets/react.svg'
+import viteLogo from '/vite.svg'
 import './App.css'
 
 function App() {
-  const [isSetup, setIsSetup] = useState(false)
-  const [walletAddress, setWalletAddress] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    // Check if wallet is already set up
-    chrome.storage.local.get(['wallet_address', 'wallet_setup'], (result) => {
-      if (result.wallet_setup && result.wallet_address) {
-        setIsSetup(true)
-        setWalletAddress(result.wallet_address)
-      }
-      setLoading(false)
-    })
-  }, [])
-
-  const handleWalletCreated = (address: string) => {
-    setWalletAddress(address)
-    setIsSetup(true)
-    // Store in chrome storage
-    chrome.storage.local.set({
-      wallet_setup: true,
-      wallet_address: address,
-    })
-  }
-
-  const handleLogout = () => {
-    setIsSetup(false)
-    setWalletAddress(null)
-    // Clear storage
-    chrome.storage.local.remove(['wallet_setup', 'wallet_address'])
-  }
-
-  if (loading) {
-    return (
-      <div className="extension-container">
-        <div className="flex items-center justify-center h-full">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-        </div>
-      </div>
-    )
-  }
+  const [count, setCount] = useState(0)
 
   return (
-    <div className="extension-container">
-      {!isSetup ? (
-        <WalletSetup onWalletCreated={handleWalletCreated} />
-      ) : (
-        <WalletDashboard address={walletAddress!} onLogout={handleLogout} />
-      )}
-    </div>
+    <>
+      <div>
+        <a href="https://vite.dev" target="_blank">
+          <img src={viteLogo} className="logo" alt="Vite logo" />
+        </a>
+        <a href="https://react.dev" target="_blank">
+          <img src={reactLogo} className="logo react" alt="React logo" />
+        </a>
+      </div>
+      <h1>Vite + React</h1>
+      <div className="card">
+        <button onClick={() => setCount((count) => count + 1)}>
+          count is {count}
+        </button>
+        <p>
+          Edit <code>src/App.tsx</code> and save to test HMR
+        </p>
+      </div>
+      <p className="read-the-docs">
+        Click on the Vite and React logos to learn more
+      </p>
+    </>
   )
 }
 
