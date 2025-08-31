@@ -13,18 +13,24 @@ import {
   MagnifyingGlassIcon
 } from '@heroicons/react/24/outline'
 import { EtherscanService, type EtherscanBalance } from './services/etherscan'
+import { walletService } from './services/wallet'
+import { priceService, type CryptoPrices } from './services/price'
 import './extension.css'
 
 function App() {
-  const [walletAddress] = useState('0x742d35Cc6634C0532925a3b8d0b4E1b87D5E2d3c')
+  const [walletAddress, setWalletAddress] = useState('0x742d35Cc6634C0532925a3b8d0b4E1b87D5E2d3c')
   const [balance, setBalance] = useState<EtherscanBalance>({ eth: '0.000000', usd: '0.00' })
   const [gasPrice, setGasPrice] = useState('N/A')
   const [copied, setCopied] = useState(false)
-  const [biometricSupported, setBiometricSupported] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [currentView, setCurrentView] = useState<'main' | 'send' | 'receive'>('main')
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('')
+  const [sendAmount, setSendAmount] = useState('')
+  const [sendAddress, setSendAddress] = useState('')
+  const [sending, setSending] = useState(false)
+  const [cryptoPrices, setCryptoPrices] = useState<CryptoPrices>({ ETH: 0, BTC: 0, USDC: 0 })
+  const [portfolioValue, setPortfolioValue] = useState<number>(0)
 
   useEffect(() => {
     initializeApp()
@@ -37,18 +43,57 @@ function App() {
   }, [currentView, qrCodeUrl])
 
   const initializeApp = async () => {
-    // Initialize biometrics check
+    setLoading(true)
+    
     try {
-      if (window.PublicKeyCredential) {
-        const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-        setBiometricSupported(available)
+      // Get current crypto prices
+      const prices = await priceService.getCurrentPrices()
+      setCryptoPrices(prices)
+      
+      // Check if wallet exists in storage
+      const storedAddress = await walletService.getStoredWallet()
+      
+      if (storedAddress) {
+        setWalletAddress(storedAddress)
+        
+        // Try to unlock existing wallet
+        const unlockResult = await walletService.unlockWallet()
+        if (unlockResult.success && unlockResult.data) {
+          const ethBalance = unlockResult.data.balance || '0.000000'
+          setBalance({ 
+            eth: ethBalance, 
+            usd: (parseFloat(ethBalance) * prices.ETH).toFixed(2)
+          })
+          
+          // Calculate portfolio value
+          const portfolio = await priceService.getPortfolioValue({
+            ETH: ethBalance,
+            BTC: '0.001', // Mock BTC balance
+            USDC: '100' // Mock USDC balance
+          })
+          setPortfolioValue(portfolio)
+        }
+      } else {
+        // No wallet found, create a new one
+        const createResult = await walletService.createWallet()
+        if (createResult.success && createResult.data) {
+          setWalletAddress(createResult.data.address)
+          setBalance({ 
+            eth: createResult.data.balance, 
+            usd: '0.00'
+          })
+        }
       }
+      
+      // Check biometric availability - this will be handled by the wallet service
+      
+      // Load additional wallet data
+      await loadWalletData()
     } catch (error) {
-      console.log('Biometric check failed:', error)
+      console.error('App initialization error:', error)
+    } finally {
+      setLoading(false)
     }
-
-    // Load wallet data
-    await loadWalletData()
   }
 
   const loadWalletData = async () => {
@@ -109,50 +154,66 @@ function App() {
   }
 
   const handleBiometricAuth = async () => {
-    if (!biometricSupported) {
-      alert('Biometric authentication not supported')
+    try {
+      const result = await walletService.verifyBiometric()
+      
+      if (result.success && result.data) {
+        if (result.data.verified) {
+          alert(`✅ ${result.data.method} verification successful!`)
+        } else {
+          alert('❌ Biometric verification failed')
+        }
+      } else {
+        alert(`⚠️ ${result.error || 'Biometric verification error'}`)
+      }
+    } catch (error) {
+      console.error('Biometric auth error:', error)
+      alert('❌ Biometric authentication failed')
+    }
+  }
+
+  const handleSendTransaction = async () => {
+    if (!sendAddress || !sendAmount) {
+      alert('Please enter both address and amount')
       return
     }
 
+    setSending(true)
     try {
-      // Simple biometric authentication without relying party ID for localhost
-      const challenge = crypto.getRandomValues(new Uint8Array(32))
+      const result = await walletService.sendTransaction(sendAddress, sendAmount, gasPrice)
       
-      const credential = await navigator.credentials.create({
-        publicKey: {
-          challenge,
-          rp: { 
-            name: 'Verox Wallet'
-            // Removed id to avoid domain issues in development
-          },
-          user: {
-            id: crypto.getRandomValues(new Uint8Array(64)),
-            name: 'verox.user',
-            displayName: 'Verox User'
-          },
-          pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
-          authenticatorSelection: {
-            authenticatorAttachment: 'platform',
-            userVerification: 'required'
-          },
-          timeout: 60000,
-          attestation: 'none'
-        }
-      })
-
-      if (credential) {
-        alert('✅ Biometric authentication successful!')
-      }
-    } catch (error: any) {
-      if (error.name === 'NotAllowedError') {
-        alert('❌ Biometric authentication cancelled or failed')
-      } else if (error.name === 'NotSupportedError') {
-        alert('❌ Biometric authentication not supported on this device')
+      if (result.success && result.data) {
+        // Save transaction to local storage
+        await walletService.saveTransaction(result.data.txHash, sendAddress, sendAmount)
+        
+        alert(`✅ Transaction sent!\nTx Hash: ${result.data.txHash.slice(0, 10)}...`)
+        
+        // Reset form and go back to main
+        setSendAmount('')
+        setSendAddress('')
+        setCurrentView('main')
+        
+        // Refresh balance
+        await loadWalletData()
       } else {
-        alert('❌ Biometric authentication failed: Please try again')
-        console.error('Biometric error:', error)
+        alert(`❌ Transaction failed: ${result.error}`)
       }
+    } catch (error) {
+      console.error('Send transaction error:', error)
+      alert('❌ Transaction failed')
+    } finally {
+      setSending(false)
     }
+  }
+
+  const handleBuyEth = () => {
+    // Open a buy ETH page - for now just show an alert
+    alert('🚀 Buy ETH feature coming soon!\n\nYou can buy ETH on exchanges like Coinbase, Binance, or Uniswap.')
+  }
+
+  const handleSwapTokens = () => {
+    // Open swap interface - for now just show an alert  
+    alert('🔄 Token swap feature coming soon!\n\nYou will be able to swap between different cryptocurrencies.')
   }
 
   if (loading) {
@@ -190,6 +251,8 @@ function App() {
               type="text" 
               placeholder="0x..." 
               className="form-input"
+              value={sendAddress}
+              onChange={(e) => setSendAddress(e.target.value)}
             />
           </div>
           
@@ -201,6 +264,8 @@ function App() {
                 placeholder="0.0" 
                 step="0.000001"
                 className="form-input"
+                value={sendAmount}
+                onChange={(e) => setSendAmount(e.target.value)}
               />
               <span className="currency-label">ETH</span>
             </div>
@@ -216,8 +281,12 @@ function App() {
             <button onClick={handleBackToMain} className="btn-secondary">
               Cancel
             </button>
-            <button className="btn-primary">
-              Send ETH
+            <button 
+              onClick={handleSendTransaction}
+              className="btn-primary"
+              disabled={sending}
+            >
+              {sending ? 'Sending...' : 'Send ETH'}
             </button>
           </div>
         </div>
@@ -294,7 +363,7 @@ function App() {
       {/* Top Header with Wallet Selector */}
       <div className="top-header">
         <div className="wallet-selector">
-          <div className="wallet-icon">🔮</div>
+          <div className="wallet-icon"></div>
           <span className="wallet-name">Verox</span>
         </div>
         <button 
@@ -308,7 +377,7 @@ function App() {
 
       {/* Main Balance Display */}
       <div className="main-balance">
-        <div className="balance-amount">${balance.usd}</div>
+        <div className="balance-amount">${portfolioValue > 0 ? portfolioValue.toFixed(2) : balance.usd}</div>
         <button className="copy-address-btn" onClick={copyAddress}>
           copy address
           {copied ? (
@@ -321,7 +390,7 @@ function App() {
 
       {/* Action Buttons Grid */}
       <div className="action-buttons">
-        <button className="main-action-btn">
+        <button className="main-action-btn" onClick={handleBuyEth}>
           <div className="action-icon">
             <CurrencyDollarIcon className="w-6 h-6" />
           </div>
@@ -333,7 +402,7 @@ function App() {
           </div>
           <span>Send</span>
         </button>
-        <button className="main-action-btn">
+        <button className="main-action-btn" onClick={handleSwapTokens}>
           <div className="action-icon">
             <ArrowsRightLeftIcon className="w-6 h-6" />
           </div>
@@ -379,7 +448,7 @@ function App() {
             </div>
           </div>
           <div className="token-value">
-            <div className="token-usd">$78.45</div>
+            <div className="token-usd">${(0.00125 * cryptoPrices.BTC).toFixed(2)}</div>
             <div className="token-change">+2.15%</div>
           </div>
         </div>
@@ -396,7 +465,7 @@ function App() {
             </div>
           </div>
           <div className="token-value">
-            <div className="token-usd">$250.00</div>
+            <div className="token-usd">${(250 * cryptoPrices.USDC).toFixed(2)}</div>
             <div className="token-change">+0.01%</div>
           </div>
         </div>

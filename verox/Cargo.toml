@@ -3,6 +3,17 @@ name = "verox"
 version = "0.1.0"
 edition = "2021"  
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "verox"
+path = "src/main.rs"
+
+[[bin]]
+name = "verox-native-host"
+path = "src/native_host.rs"
+
 [dependencies]
 clap = { version = "4.5.3", features = ["derive"] }
 ethers = "2"
@@ -17,6 +28,12 @@ base64 = "0.21"
 hex = "0.4"
 rpassword = "7.4.0"
 webauthn-authenticator-rs = "0.5"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = "0.3"
+console_error_panic_hook = { version = "0.1", optional = true }
+wee_alloc = { version = "0.4", optional = true }
+chrono = { version = "0.4", features = ["serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
@@ -31,4 +48,7 @@ windows = { version = "0.56", features = ["Win32_Security_Credentials", "Win32_F
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 cc = "1.0"
+
+[features]
+default = ["console_error_panic_hook"]
 

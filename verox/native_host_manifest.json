@@ -1,0 +1,9 @@
+{
+  "name": "com.verox.native_host",
+  "description": "Verox Wallet Native Messaging Host",
+  "path": "/Users/shaurya/Documents/Verox/verox/target/release/verox-native-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://verox-extension-id/"
+  ]
+}
