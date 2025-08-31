@@ -1,25 +1,23 @@
 import { useState, useEffect } from 'react'
 import QRCode from 'qrcode'
 import { 
-  ShieldCheckIcon, 
-  WalletIcon, 
   FingerPrintIcon, 
-  EyeIcon,
   ClipboardIcon,
   CheckCircleIcon,
   ArrowPathIcon,
   CurrencyDollarIcon,
   FireIcon,
-  ClockIcon,
-  ArrowLeftIcon
+  ArrowLeftIcon,
+  ArrowUpIcon,
+  ArrowsRightLeftIcon,
+  MagnifyingGlassIcon
 } from '@heroicons/react/24/outline'
-import { EtherscanService, type EtherscanBalance, type EtherscanTransaction } from './services/etherscan'
+import { EtherscanService, type EtherscanBalance } from './services/etherscan'
 import './extension.css'
 
 function App() {
   const [walletAddress] = useState('0x742d35Cc6634C0532925a3b8d0b4E1b87D5E2d3c')
   const [balance, setBalance] = useState<EtherscanBalance>({ eth: '0.000000', usd: '0.00' })
-  const [transactions, setTransactions] = useState<EtherscanTransaction[]>([])
   const [gasPrice, setGasPrice] = useState('N/A')
   const [copied, setCopied] = useState(false)
   const [biometricSupported, setBiometricSupported] = useState(false)
@@ -31,6 +29,12 @@ function App() {
   useEffect(() => {
     initializeApp()
   }, [])
+
+  useEffect(() => {
+    if (currentView === 'receive' && !qrCodeUrl) {
+      generateQRCode()
+    }
+  }, [currentView, qrCodeUrl])
 
   const initializeApp = async () => {
     // Initialize biometrics check
@@ -50,14 +54,12 @@ function App() {
   const loadWalletData = async () => {
     setLoading(true)
     try {
-      const [balanceData, transactionData, gasPriceData] = await Promise.all([
+      const [balanceData, gasPriceData] = await Promise.all([
         EtherscanService.getBalance(walletAddress),
-        EtherscanService.getTransactions(walletAddress, 3),
         EtherscanService.getGasPrice()
       ])
       
       setBalance(balanceData)
-      setTransactions(transactionData)
       setGasPrice(gasPriceData)
     } catch (error) {
       console.error('Error loading wallet data:', error)
@@ -74,11 +76,6 @@ function App() {
 
   const handleSend = () => {
     setCurrentView('send')
-  }
-
-  const handleReceive = async () => {
-    setCurrentView('receive')
-    await generateQRCode()
   }
 
   const handleBackToMain = () => {
@@ -294,126 +291,146 @@ function App() {
   // Main View
   return (
     <div className="extension-container">
-      {/* Header */}
-      <div className="header">
-        <div className="flex items-center justify-between w-full">
-          <div className="flex items-center space-x-2">
-            <ShieldCheckIcon className="w-5 h-5 text-purple-400" />
-            <span className="font-bold text-lg">Verox</span>
+      {/* Top Header with Wallet Selector */}
+      <div className="top-header">
+        <div className="wallet-selector">
+          <div className="wallet-icon">🔮</div>
+          <span className="wallet-name">Verox</span>
+        </div>
+        <button 
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="header-action-btn"
+        >
+          <ArrowPathIcon className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {/* Main Balance Display */}
+      <div className="main-balance">
+        <div className="balance-amount">${balance.usd}</div>
+        <button className="copy-address-btn" onClick={copyAddress}>
+          copy address
+          {copied ? (
+            <CheckCircleIcon className="w-4 h-4 text-green-400" />
+          ) : (
+            <ClipboardIcon className="w-4 h-4" />
+          )}
+        </button>
+      </div>
+
+      {/* Action Buttons Grid */}
+      <div className="action-buttons">
+        <button className="main-action-btn">
+          <div className="action-icon">
+            <CurrencyDollarIcon className="w-6 h-6" />
           </div>
-          <button 
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="refresh-btn"
-          >
-            <ArrowPathIcon className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-        <div className="text-xs text-gray-400 mt-1">Secure Ethereum Wallet</div>
-      </div>
-
-      {/* Balance */}
-      <div className="balance-card">
-        <div className="flex items-center justify-center mb-2">
-          <CurrencyDollarIcon className="w-8 h-8 text-purple-400" />
-        </div>
-        <div className="text-3xl font-bold text-center mb-1">{balance.eth} ETH</div>
-        <div className="text-sm text-gray-400 text-center">≈ ${balance.usd} USD</div>
-      </div>
-
-      {/* Address */}
-      <div className="address-section">
-        <div className="flex items-center justify-between">
-          <div className="flex-1">
-            <div className="text-xs text-gray-400 mb-1">Wallet Address</div>
-            <div className="font-mono text-sm truncate text-gray-200">{walletAddress}</div>
+          <span>Buy</span>
+        </button>
+        <button className="main-action-btn" onClick={handleSend}>
+          <div className="action-icon">
+            <ArrowUpIcon className="w-6 h-6" />
           </div>
-          <button 
-            onClick={copyAddress}
-            className="copy-btn"
-          >
-            {copied ? (
-              <CheckCircleIcon className="w-4 h-4 text-green-400" />
-            ) : (
-              <ClipboardIcon className="w-4 h-4 text-purple-400" />
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Quick Stats */}
-      <div className="stats-row">
-        <div className="stat-item">
-          <FireIcon className="w-4 h-4 text-orange-400" />
-          <span className="text-xs text-gray-400">Gas</span>
-          <span className="text-xs font-medium text-gray-200">{gasPrice}</span>
-        </div>
-        <div className="stat-item">
-          <ClockIcon className="w-4 h-4 text-blue-400" />
-          <span className="text-xs text-gray-400">Txns</span>
-          <span className="text-xs font-medium text-gray-200">{transactions.length}</span>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="actions-grid">
-        <button className="action-btn" onClick={handleSend}>
-          <WalletIcon className="w-5 h-5" />
           <span>Send</span>
         </button>
-        <button className="action-btn" onClick={handleReceive}>
-          <EyeIcon className="w-5 h-5" />
-          <span>Receive</span>
-        </button>
-        <button 
-          onClick={handleBiometricAuth}
-          className={`action-btn ${!biometricSupported ? 'opacity-50' : ''}`}
-          disabled={!biometricSupported}
-        >
-          <FingerPrintIcon className="w-5 h-5" />
-          <span>{biometricSupported ? 'Touch ID' : 'No Touch ID'}</span>
+        <button className="main-action-btn">
+          <div className="action-icon">
+            <ArrowsRightLeftIcon className="w-6 h-6" />
+          </div>
+          <span>Swap</span>
         </button>
       </div>
 
-      {/* Recent Transactions */}
-      {transactions.length > 0 && (
-        <div className="transactions-section">
-          <div className="text-sm font-medium text-gray-300 mb-2">Recent Activity</div>
-          <div className="transactions-list">
-            {transactions.slice(0, 2).map((tx) => (
-              <div key={tx.hash} className="transaction-item">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="text-xs font-mono text-gray-400">
-                      {tx.hash.slice(0, 8)}...{tx.hash.slice(-6)}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {tx.from.toLowerCase() === walletAddress.toLowerCase() ? 'Sent' : 'Received'}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className={`text-xs font-medium ${
-                      tx.from.toLowerCase() === walletAddress.toLowerCase() 
-                        ? 'text-red-400' 
-                        : 'text-green-400'
-                    }`}>
-                      {tx.from.toLowerCase() === walletAddress.toLowerCase() ? '-' : '+'}
-                      {parseFloat(tx.value).toFixed(4)} ETH
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
+      {/* Your Tokens Section */}
+      <div className="tokens-section">
+        <div className="section-header">
+          <h3>Your tokens</h3>
+          <button className="search-btn">
+            <MagnifyingGlassIcon className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* ETH Token Display */}
+        <div className="token-item">
+          <div className="token-info">
+            <div className="token-icon">
+              <div className="eth-icon">Ξ</div>
+            </div>
+            <div className="token-details">
+              <div className="token-name">ETH</div>
+              <div className="token-amount">{balance.eth} ETH</div>
+            </div>
+          </div>
+          <div className="token-value">
+            <div className="token-usd">${balance.usd}</div>
+            <div className="token-change">+0.40%</div>
           </div>
         </div>
-      )}
 
-      {/* Network Status */}
-      <div className="network-status">
-        <div className="status-item">
-          <div className="status-dot status-connected"></div>
-          <span className="text-xs text-gray-400">Ethereum Mainnet</span>
+        {/* BTC Token Display */}
+        <div className="token-item">
+          <div className="token-info">
+            <div className="token-icon">
+              <div className="btc-icon">₿</div>
+            </div>
+            <div className="token-details">
+              <div className="token-name">BTC</div>
+              <div className="token-amount">0.00125 BTC</div>
+            </div>
+          </div>
+          <div className="token-value">
+            <div className="token-usd">$78.45</div>
+            <div className="token-change">+2.15%</div>
+          </div>
         </div>
+
+        {/* USDC Token Display */}
+        <div className="token-item">
+          <div className="token-info">
+            <div className="token-icon">
+              <div className="usdc-icon">$</div>
+            </div>
+            <div className="token-details">
+              <div className="token-name">USDC</div>
+              <div className="token-amount">250.00 USDC</div>
+            </div>
+          </div>
+          <div className="token-value">
+            <div className="token-usd">$250.00</div>
+            <div className="token-change">+0.01%</div>
+          </div>
+        </div>
+
+        {/* Gas Price Info */}
+        <div className="token-item">
+          <div className="token-info">
+            <div className="token-icon">
+              <FireIcon className="w-5 h-5 text-orange-400" />
+            </div>
+            <div className="token-details">
+              <div className="token-name">Gas Price</div>
+              <div className="token-amount">{gasPrice}</div>
+            </div>
+          </div>
+          <div className="token-value">
+            <div className="token-usd">Network</div>
+            <div className="token-change">Mainnet</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Navigation */}
+      <div className="bottom-nav">
+        <button className="nav-item active">
+          <div className="nav-icon">🏠</div>
+          <span>Home</span>
+        </button>
+        <button className="nav-item" onClick={handleBiometricAuth}>
+          <div className="nav-icon">
+            <FingerPrintIcon className="w-5 h-5" />
+          </div>
+          <span>Settings</span>
+        </button>
       </div>
     </div>
   )
