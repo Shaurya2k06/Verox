@@ -28,49 +28,93 @@ export interface Transaction {
   amount: string;
   timestamp: number;
   status: 'pending' | 'confirmed' | 'failed';
+  tokenSymbol?: string; // Added for token support
 }
+
+// Minimal ERC-20 ABI
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function transfer(address to, uint amount) returns (bool)",
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)"
+];
 
 class WalletService {
   private readonly STORAGE_KEYS = {
-    ADDRESS: 'verox_wallet_address',
-    MNEMONIC: 'verox_wallet_mnemonic', // Storing mnemonic locally for demo purposes
-    TRANSACTIONS: 'verox_transactions'
+    ENCRYPTED_WALLET: 'verox_encrypted_wallet',
+    TRANSACTIONS: 'verox_transactions',
+    NETWORKS: 'verox_networks' // For future network support
   };
 
   // Sepolia Testnet RPC
   private readonly RPC_URL = 'https://ethereum-sepolia-rpc.publicnode.com';
   private provider: ethers.JsonRpcProvider;
+  private walletInstance: ethers.HDNodeWallet | ethers.Wallet | null = null;
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(this.RPC_URL);
   }
 
-  // Helper to get wallet instance from storage
+  // Helper to get wallet instance (must be unlocked first)
   private async getWalletInstance(): Promise<ethers.HDNodeWallet | ethers.Wallet | null> {
-    const mnemonic = localStorage.getItem(this.STORAGE_KEYS.MNEMONIC);
-    if (!mnemonic) return null;
+    return this.walletInstance;
+  }
+
+  async hasWallet(): Promise<boolean> {
+    return !!localStorage.getItem(this.STORAGE_KEYS.ENCRYPTED_WALLET);
+  }
+
+  async getBalance(address: string): Promise<string> {
     try {
-      return ethers.Wallet.fromPhrase(mnemonic, this.provider);
+      const balanceBigInt = await this.provider.getBalance(address);
+      return ethers.formatEther(balanceBigInt);
     } catch (error) {
-      console.error('Failed to load wallet from mnemonic:', error);
-      return null;
+      console.error('Error fetching balance:', error);
+      return '0.0';
     }
   }
 
-  async createWalletFromMnemonic(mnemonic: string): Promise<WalletServiceResult<WalletInfo>> {
+  async unlockWalletWithPassword(password: string): Promise<WalletServiceResult<WalletInfo>> {
+    const encryptedJson = localStorage.getItem(this.STORAGE_KEYS.ENCRYPTED_WALLET);
+    if (!encryptedJson) {
+      return { success: false, error: 'No wallet found' };
+    }
+
     try {
-      // Validate mnemonic by attempting to create a wallet
+      // Decrypt the wallet
+      const wallet = await ethers.Wallet.fromEncryptedJson(encryptedJson, password);
+      this.walletInstance = wallet.connect(this.provider);
+
+      const balanceBigInt = await this.provider.getBalance(this.walletInstance.address);
+      const balance = ethers.formatEther(balanceBigInt);
+
+      return {
+        success: true,
+        data: {
+          address: this.walletInstance.address,
+          balance
+        }
+      };
+    } catch (error) {
+      console.error('Error unlocking wallet:', error);
+      return { success: false, error: 'Incorrect password' };
+    }
+  }
+
+  async createWalletFromMnemonic(mnemonic: string, password: string): Promise<WalletServiceResult<WalletInfo>> {
+    try {
       const wallet = ethers.Wallet.fromPhrase(mnemonic, this.provider);
 
-      // Get real balance
+      // Encrypt wallet
+      const encryptedJson = await wallet.encrypt(password);
+      localStorage.setItem(this.STORAGE_KEYS.ENCRYPTED_WALLET, encryptedJson);
+
+      // Initialize instance
+      this.walletInstance = wallet;
+
       const balanceBigInt = await this.provider.getBalance(wallet.address);
       const balance = ethers.formatEther(balanceBigInt);
 
-      // Store data
-      localStorage.setItem(this.STORAGE_KEYS.ADDRESS, wallet.address);
-      localStorage.setItem(this.STORAGE_KEYS.MNEMONIC, mnemonic);
-
-      // Initialize empty transactions if not present
       if (!localStorage.getItem(this.STORAGE_KEYS.TRANSACTIONS)) {
         localStorage.setItem(this.STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
       }
@@ -84,20 +128,23 @@ class WalletService {
       };
     } catch (error) {
       console.error('Error creating wallet from mnemonic:', error);
-      return { success: false, error: 'Invalid recovery phrase' };
+      return { success: false, error: 'Invalid recovery phrase or encryption failed' };
     }
   }
 
-  async createWallet(): Promise<WalletServiceResult<WalletInfo & { mnemonic: string }>> {
+  async createWallet(password: string): Promise<WalletServiceResult<WalletInfo & { mnemonic: string }>> {
     try {
       const wallet = ethers.Wallet.createRandom(this.provider);
       const mnemonic = wallet.mnemonic!.phrase;
 
-      // New wallets have 0 balance
-      const balance = '0.0';
+      // Encrypt wallet
+      const encryptedJson = await wallet.encrypt(password);
+      localStorage.setItem(this.STORAGE_KEYS.ENCRYPTED_WALLET, encryptedJson);
 
-      localStorage.setItem(this.STORAGE_KEYS.ADDRESS, wallet.address);
-      localStorage.setItem(this.STORAGE_KEYS.MNEMONIC, mnemonic);
+      // Initialize instance
+      this.walletInstance = wallet;
+
+      const balance = '0.0';
       localStorage.setItem(this.STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
 
       return {
@@ -114,93 +161,96 @@ class WalletService {
     }
   }
 
-  async unlockWallet(): Promise<WalletServiceResult<WalletInfo>> {
-    const wallet = await this.getWalletInstance();
+  // Removed old unlockWallet as it relied on insecure storage
+  // Replaced with unlockWalletWithPassword
 
-    if (wallet) {
-      try {
-        // Fetch real balance
-        const balanceBigInt = await this.provider.getBalance(wallet.address);
-        const balance = ethers.formatEther(balanceBigInt);
-
-        return {
-          success: true,
-          data: {
-            address: wallet.address,
-            balance
-          }
-        };
-      } catch (error) {
-        console.error('Error fetching balance:', error);
-        // Return stored address with 0 balance if network fails, or handle error
-        return {
-          success: true,
-          data: {
-            address: wallet.address,
-            balance: '0.0' // Could fallback to cached balance if we stored it
-          }
-        };
-      }
+  async getTokenBalance(tokenAddress: string, walletAddress: string): Promise<string> {
+    try {
+      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, this.provider);
+      const balance = await contract.balanceOf(walletAddress);
+      const decimals = await contract.decimals();
+      return ethers.formatUnits(balance, decimals);
+    } catch (error) {
+      console.error('Error fetching token balance:', error);
+      return '0.0';
     }
-
-    return {
-      success: false,
-      error: 'No wallet found'
-    };
   }
 
   async sendTransaction(to: string, amount: string): Promise<WalletServiceResult<TransactionResult>> {
-    const wallet = await this.getWalletInstance();
-
-    if (!wallet) {
-      return { success: false, error: 'Wallet not initialized' };
+    if (!this.walletInstance) {
+      return { success: false, error: 'Wallet not unlocked' };
     }
 
     try {
-      const tx = await wallet.sendTransaction({
+      const tx = await this.walletInstance.sendTransaction({
         to,
         value: ethers.parseEther(amount)
       });
 
-      // We return the hash immediately, but in a real app we might wait for confirmation
-      // or let the UI poll for it.
-
-      await this.saveTransaction(tx.hash, to, amount);
+      await this.saveTransaction(tx.hash, to, amount, 'ETH');
 
       return {
         success: true,
         data: {
           txHash: tx.hash,
-          status: 'pending' // It's pending until mined
+          status: 'pending'
         }
       };
     } catch (error: any) {
       console.error('Transaction error:', error);
-      // Extract useful error message if possible
       const msg = error.reason || error.message || 'Transaction failed';
       return { success: false, error: msg };
     }
   }
 
-  async getStoredWallet(): Promise<string | null> {
-    return localStorage.getItem(this.STORAGE_KEYS.ADDRESS);
+  async sendToken(tokenAddress: string, to: string, amount: string): Promise<WalletServiceResult<TransactionResult>> {
+    if (!this.walletInstance) {
+      return { success: false, error: 'Wallet not unlocked' };
+    }
+
+    try {
+      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, this.walletInstance);
+      const decimals = await contract.decimals();
+      const symbol = await contract.symbol();
+
+      const tx = await contract.transfer(to, ethers.parseUnits(amount, decimals));
+
+      await this.saveTransaction(tx.hash, to, amount, symbol);
+
+      return {
+        success: true,
+        data: {
+          txHash: tx.hash,
+          status: 'pending'
+        }
+      };
+    } catch (error: any) {
+      console.error('Token transaction error:', error);
+      const msg = error.reason || error.message || 'Token transaction failed';
+      return { success: false, error: msg };
+    }
   }
 
-  async saveTransaction(txHash: string, to: string, amount: string): Promise<void> {
+  async getStoredWallet(): Promise<string | null> {
+    // This is now just a check if a wallet exists, but doesn't return address without unlock
+    // We can return a dummy value or null to trigger unlock flow
+    const exists = await this.hasWallet();
+    return exists ? 'LOCKED' : null;
+  }
+
+  async saveTransaction(txHash: string, to: string, amount: string, tokenSymbol: string = 'ETH'): Promise<void> {
     const transactions = await this.getStoredTransactions();
     const newTx: Transaction = {
       hash: txHash,
       to,
       amount,
       timestamp: Date.now(),
-      status: 'pending'
+      status: 'pending',
+      tokenSymbol
     };
 
     transactions.unshift(newTx);
-
-    // Keep only last 50 transactions
     const limitedTransactions = transactions.slice(0, 50);
-
     localStorage.setItem(this.STORAGE_KEYS.TRANSACTIONS, JSON.stringify(limitedTransactions));
   }
 
@@ -210,9 +260,9 @@ class WalletService {
   }
 
   async resetWallet(): Promise<void> {
-    localStorage.removeItem(this.STORAGE_KEYS.ADDRESS);
-    localStorage.removeItem(this.STORAGE_KEYS.MNEMONIC);
+    localStorage.removeItem(this.STORAGE_KEYS.ENCRYPTED_WALLET);
     localStorage.removeItem(this.STORAGE_KEYS.TRANSACTIONS);
+    this.walletInstance = null;
   }
 }
 

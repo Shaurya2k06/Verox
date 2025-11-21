@@ -37,7 +37,5 @@
 }
 
 @layer utilities {
-    .text-gradient {
-        @apply bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400;
-    }
+    /* Removed text-gradient as per user request */
 }

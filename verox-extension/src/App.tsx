@@ -12,11 +12,16 @@ import {
   XMarkIcon,
   HomeIcon,
   Cog6ToothIcon,
-  WalletIcon
+  WalletIcon,
+  ChevronDownIcon
 } from '@heroicons/react/24/outline'
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid } from 'recharts'
 import { walletService } from './services/wallet'
-import { priceService, type CryptoPrices } from './services/price'
+import { priceService, type CryptoPrices, type PricePoint } from './services/price'
 import logo from './assets/logo.png'
+
+// Sepolia USDC Address
+const SEPOLIA_USDC_ADDRESS = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238';
 
 // Toast Component
 interface ToastProps {
@@ -49,12 +54,12 @@ const Toast = ({ message, type, onClose }: ToastProps) => {
 
 function App() {
   const [walletAddress, setWalletAddress] = useState('')
-  const [balance, setBalance] = useState<{ eth: string; usd: string }>({ eth: '0.000000', usd: '0.00' })
+  const [balance, setBalance] = useState<{ eth: string; usd: string; usdc: string }>({ eth: '0.000000', usd: '0.00', usdc: '0.00' })
   const [gasPrice, setGasPrice] = useState('N/A')
   const [copied, setCopied] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [currentView, setCurrentView] = useState<'onboarding' | 'create' | 'import' | 'main' | 'send' | 'receive'>('onboarding')
+  const [currentView, setCurrentView] = useState<'onboarding' | 'create' | 'import' | 'main' | 'send' | 'receive' | 'asset-details'>('onboarding')
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('')
   const [sendAmount, setSendAmount] = useState('')
   const [sendAddress, setSendAddress] = useState('')
@@ -64,10 +69,38 @@ function App() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
   const [mnemonic, setMnemonic] = useState<string>('')
   const [importPhrase, setImportPhrase] = useState('')
+  const [selectedToken, setSelectedToken] = useState<'ETH' | 'USDC'>('ETH')
+
+  // Security State
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [unlockPassword, setUnlockPassword] = useState('')
+  const [isLocked, setIsLocked] = useState(false)
+  const [showPasswordCreate, setShowPasswordCreate] = useState(false)
+
+  // Chart State
+  const [selectedAsset, setSelectedAsset] = useState<'ETH' | 'BTC' | 'USDC' | null>(null)
+  const [historicalData, setHistoricalData] = useState<PricePoint[]>([])
+  const [chartLoading, setChartLoading] = useState(false)
+  const [timeframe, setTimeframe] = useState<'1D' | '1W' | '1M'>('1D');
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type })
   }
+
+  const handleTimeframeChange = async (tf: '1D' | '1W' | '1M') => {
+    if (!selectedAsset) return;
+    setTimeframe(tf);
+    setChartLoading(true);
+    try {
+      const history = await priceService.getHistoricalPrices(selectedAsset, tf);
+      setHistoricalData(history);
+    } catch (error) {
+      console.error('Failed to load history:', error);
+    } finally {
+      setChartLoading(false);
+    }
+  };
 
   useEffect(() => {
     initializeApp()
@@ -79,38 +112,31 @@ function App() {
     }
   }, [currentView, qrCodeUrl])
 
+  // Poll for live price updates when in asset details view
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (currentView === 'asset-details' && selectedAsset) {
+      interval = setInterval(async () => {
+        const prices = await priceService.getCurrentPrices();
+        setCryptoPrices(prices);
+        // Ideally we would append this to historicalData too for "live" chart feel
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [currentView, selectedAsset]);
+
   const initializeApp = async () => {
     setLoading(true)
 
     try {
-      // Get current crypto prices
       const prices = await priceService.getCurrentPrices()
       setCryptoPrices(prices)
 
-      // Check if wallet exists in storage
-      let currentAddress = await walletService.getStoredWallet()
+      const hasWallet = await walletService.hasWallet()
 
-      if (currentAddress) {
-        setWalletAddress(currentAddress)
-
-        // Get balance from local storage via wallet service
-        const unlockResult = await walletService.unlockWallet()
-        if (unlockResult.success && unlockResult.data) {
-          const ethBalance = unlockResult.data.balance
-          setBalance({
-            eth: ethBalance,
-            usd: (parseFloat(ethBalance) * prices.ETH).toFixed(2)
-          })
-
-          // Calculate portfolio value
-          const portfolio = await priceService.getPortfolioValue({
-            ETH: ethBalance,
-            BTC: '0.00125',
-            USDC: '250'
-          })
-          setPortfolioValue(portfolio)
-          setCurrentView('main')
-        }
+      if (hasWallet) {
+        setIsLocked(true)
+        setCurrentView('main') // Will show unlock screen overlay
       } else {
         setCurrentView('onboarding')
       }
@@ -122,60 +148,110 @@ function App() {
     }
   }
 
-  const loadWalletData = async () => {
+  const handleUnlock = async () => {
     setLoading(true)
     try {
-      const prices = await priceService.getCurrentPrices()
+      const result = await walletService.unlockWalletWithPassword(unlockPassword)
+      if (result.success && result.data) {
+        setWalletAddress(result.data.address)
+        await loadWalletData(result.data.address)
+        setIsLocked(false)
+        setUnlockPassword('')
+      } else {
+        showToast(result.error || 'Incorrect password', 'error')
+      }
+    } catch (error) {
+      showToast('Failed to unlock wallet', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadWalletData = async (address?: string, currentPrices?: CryptoPrices) => {
+    const targetAddress = address || walletAddress
+    if (!targetAddress) return
+
+    try {
+      const prices = currentPrices || await priceService.getCurrentPrices()
       setCryptoPrices(prices)
 
-      const unlockResult = await walletService.unlockWallet()
-      if (unlockResult.success && unlockResult.data) {
-        const ethBalance = unlockResult.data.balance
-        setBalance({
-          eth: ethBalance,
-          usd: (parseFloat(ethBalance) * prices.ETH).toFixed(2)
-        })
+      // Wallet is already unlocked if we are here
+      const ethBalance = await walletService.getBalance(targetAddress)
+      const usdcBalance = await walletService.getTokenBalance(SEPOLIA_USDC_ADDRESS, targetAddress)
 
-        // Update portfolio
-        const portfolio = await priceService.getPortfolioValue({
-          ETH: ethBalance,
-          BTC: '0.00125',
-          USDC: '250'
-        })
-        setPortfolioValue(portfolio)
-      }
+      setBalance({
+        eth: ethBalance,
+        usd: (parseFloat(ethBalance) * prices.ETH).toFixed(2),
+        usdc: usdcBalance
+      })
 
-      // Mock gas price for now as we don't have a real provider
+      const portfolio = await priceService.getPortfolioValue({
+        ETH: ethBalance,
+        BTC: '0',
+        USDC: usdcBalance
+      })
+      setPortfolioValue(portfolio)
+
       setGasPrice('15 gwei')
     } catch (error) {
       console.error('Error loading wallet data:', error)
     } finally {
-      setLoading(false)
       setRefreshing(false)
     }
   }
 
+  const handleAssetClick = async (asset: 'ETH' | 'BTC' | 'USDC') => {
+    setSelectedAsset(asset);
+    setCurrentView('asset-details');
+    setChartLoading(true);
+    try {
+      const history = await priceService.getHistoricalPrices(asset, timeframe);
+      setHistoricalData(history);
+    } catch (error) {
+      console.error('Failed to load history:', error);
+      showToast('Failed to load chart data', 'error');
+    } finally {
+      setChartLoading(false);
+    }
+  };
+
+  const handleCreateWalletStep1 = () => {
+    setShowPasswordCreate(true)
+    setCurrentView('create')
+  }
+
   const handleCreateWallet = async () => {
+    if (password !== confirmPassword) {
+      showToast('Passwords do not match', 'error')
+      return
+    }
+    if (password.length < 8) {
+      showToast('Password must be at least 8 characters', 'error')
+      return
+    }
+
     setLoading(true)
     try {
-      const result = await walletService.createWallet()
+      const result = await walletService.createWallet(password)
       if (result.success && result.data && 'mnemonic' in result.data) {
         setMnemonic(result.data.mnemonic)
         setWalletAddress(result.data.address)
-        setBalance({
-          eth: result.data.balance,
-          usd: (parseFloat(result.data.balance) * cryptoPrices.ETH).toFixed(2)
-        })
-        setCurrentView('create')
+        setBalance({ eth: '0.000000', usd: '0.00', usdc: '0.00' })
+        setShowPasswordCreate(false)
+        // Stay on 'create' view to show mnemonic
       } else {
-        showToast('Failed to create wallet', 'error')
+        showToast(result.error || 'Failed to create wallet', 'error')
       }
     } catch (error) {
-      console.error('Create wallet error:', error)
-      showToast('Failed to create wallet', 'error')
+      showToast('Error creating wallet', 'error')
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleImportWalletStep1 = () => {
+    setShowPasswordCreate(true)
+    setCurrentView('import')
   }
 
   const handleImportWallet = async () => {
@@ -183,27 +259,41 @@ function App() {
       showToast('Please enter your recovery phrase', 'error')
       return
     }
+    if (password !== confirmPassword) {
+      showToast('Passwords do not match', 'error')
+      return
+    }
+    if (password.length < 8) {
+      showToast('Password must be at least 8 characters', 'error')
+      return
+    }
 
     setLoading(true)
     try {
-      const result = await walletService.createWalletFromMnemonic(importPhrase)
+      const result = await walletService.createWalletFromMnemonic(importPhrase, password)
       if (result.success && result.data) {
         setWalletAddress(result.data.address)
-        setBalance({
-          eth: result.data.balance,
-          usd: (parseFloat(result.data.balance) * cryptoPrices.ETH).toFixed(2)
-        })
+        await loadWalletData(result.data.address)
         setCurrentView('main')
+        setShowPasswordCreate(false)
+        setPassword('')
+        setConfirmPassword('')
         showToast('Wallet imported successfully', 'success')
       } else {
         showToast(result.error || 'Invalid recovery phrase', 'error')
       }
     } catch (error) {
-      console.error('Import wallet error:', error)
-      showToast('Failed to import wallet', 'error')
+      showToast('Error importing wallet', 'error')
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    showToast('Copied to clipboard', 'success')
+    setTimeout(() => setCopied(false), 2000)
   }
 
   const handleRefresh = async () => {
@@ -211,12 +301,38 @@ function App() {
     await loadWalletData()
   }
 
-  const handleSend = () => {
-    setCurrentView('send')
-  }
+  const handleSend = async () => {
+    if (!sendAddress || !sendAmount) {
+      showToast('Please enter both address and amount', 'error')
+      return
+    }
 
-  const handleBackToMain = () => {
-    setCurrentView('main')
+    setSending(true)
+    try {
+      let result;
+
+      if (selectedToken === 'ETH') {
+        result = await walletService.sendTransaction(sendAddress, sendAmount)
+      } else {
+        result = await walletService.sendToken(SEPOLIA_USDC_ADDRESS, sendAddress, sendAmount)
+      }
+
+      if (result.success) {
+        showToast('Transaction sent! Waiting for confirmation...', 'success')
+        setSendAddress('')
+        setSendAmount('')
+        setCurrentView('main')
+        window.open(`https://sepolia.etherscan.io/tx/${result.data?.txHash}`, '_blank')
+        await loadWalletData()
+      } else {
+        showToast(result.error || 'Transaction failed', 'error')
+      }
+    } catch (error) {
+      console.error('Transaction error:', error)
+      showToast('Transaction failed', 'error')
+    } finally {
+      setSending(false)
+    }
   }
 
   const generateQRCode = async () => {
@@ -235,47 +351,10 @@ function App() {
     }
   }
 
-  const copyAddress = async () => {
-    try {
-      await navigator.clipboard.writeText(walletAddress)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch (error) {
-      console.error('Copy failed:', error)
-    }
-  }
-
-  const handleSendTransaction = async () => {
-    if (!sendAddress || !sendAmount) {
-      showToast('Please enter both address and amount', 'error')
-      return
-    }
-
-    setSending(true)
-    try {
-      const result = await walletService.sendTransaction(sendAddress, sendAmount)
-
-      if (result.success) {
-        showToast('Transaction sent! Waiting for confirmation...', 'success')
-        setSendAddress('')
-        setSendAmount('')
-        setCurrentView('main')
-
-        // Open Etherscan in new tab
-        window.open(`https://sepolia.etherscan.io/tx/${result.data?.txHash}`, '_blank')
-
-        // Refresh wallet data
-        await loadWalletData()
-      } else {
-        showToast(result.error || 'Transaction failed', 'error')
-      }
-    } catch (error) {
-      console.error('Transaction error:', error)
-      showToast('Transaction failed', 'error')
-    } finally {
-      setSending(false)
-    }
-  }
+  const handleBackToMain = () => {
+    setCurrentView('main');
+    setSelectedAsset(null);
+  };
 
   if (loading) {
     return (
@@ -288,87 +367,165 @@ function App() {
     )
   }
 
-  // Onboarding Views
-  if (currentView === 'onboarding') {
+  // Unlock Screen
+  if (isLocked) {
     return (
-      <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col p-6 relative overflow-hidden animate-in fade-in duration-500">
+      <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col items-center justify-center p-6 animate-in fade-in duration-500">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+        <div className="w-20 h-20 mb-6 relative">
+          <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse"></div>
+          <img src={logo} alt="Verox" className="w-full h-full object-contain relative z-10" />
+        </div>
+        <h1 className="text-2xl font-bold mb-2">Welcome Back</h1>
+        <p className="text-zinc-400 text-sm mb-8">Enter your password to unlock</p>
 
-        <div className="flex-1 flex flex-col items-center justify-center text-center z-10">
-          <div className="relative mb-8 group">
-            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-600 blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
-            <div className="w-24 h-24 bg-zinc-900/50 backdrop-blur-xl rounded-3xl flex items-center justify-center ring-1 ring-white/10 shadow-2xl relative z-10">
-              <img src={logo} alt="Verox" className="w-16 h-16 drop-shadow-lg" />
-            </div>
-          </div>
-
-          <h1 className="text-3xl font-bold mb-3 tracking-tight">
-            <span className="text-gradient">Verox</span>
-          </h1>
-          <p className="text-zinc-400 mb-10 text-sm leading-relaxed max-w-[260px]">
-            The next generation crypto wallet for the decentralized web.
-          </p>
-
-          <div className="w-full space-y-3">
-            <button
-              onClick={handleCreateWallet}
-              className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 rounded-2xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 group"
-            >
-              <WalletIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-              Create New Wallet
-            </button>
-            <button
-              onClick={() => setCurrentView('import')}
-              className="w-full py-4 bg-zinc-900/50 hover:bg-zinc-800/50 border border-white/5 hover:border-white/10 rounded-2xl font-medium transition-all active:scale-95 backdrop-blur-sm"
-            >
-              I already have a wallet
-            </button>
-          </div>
+        <div className="w-full space-y-4">
+          <input
+            type="password"
+            value={unlockPassword}
+            onChange={(e) => setUnlockPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+            onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+          />
+          <button
+            onClick={handleUnlock}
+            disabled={loading || !unlockPassword}
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+          >
+            {loading ? <ArrowPathIcon className="w-5 h-5 animate-spin" /> : 'Unlock Wallet'}
+          </button>
         </div>
 
-        {/* Background decorations */}
+        <button
+          onClick={() => {
+            if (confirm('Are you sure? This will wipe your wallet data. You will need your recovery phrase to restore it.')) {
+              walletService.resetWallet();
+              setIsLocked(false);
+              setCurrentView('onboarding');
+            }
+          }}
+          className="mt-6 text-xs text-zinc-600 hover:text-red-400 transition-colors"
+        >
+          Reset Wallet
+        </button>
+      </div>
+    )
+  }
+
+  // Onboarding View
+  if (currentView === 'onboarding') {
+    return (
+      <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col items-center justify-center p-6 animate-in fade-in duration-500 relative overflow-hidden">
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+        {/* Background Effects */}
         <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
-          <div className="absolute -top-20 -right-20 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl animate-pulse"></div>
-          <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl animate-pulse delay-1000"></div>
+          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[100px] rounded-full"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[100px] rounded-full"></div>
+        </div>
+
+        <div className="w-24 h-24 mb-8 relative">
+          <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse"></div>
+          <img src={logo} alt="Verox" className="w-full h-full object-contain relative z-10" />
+        </div>
+
+        <h1 className="text-4xl font-bold tracking-tighter mb-2 bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">Verox</h1>
+        <p className="text-zinc-400 text-center mb-12 max-w-[260px] leading-relaxed">
+          The next generation of crypto wallets. Secure, fast, and beautiful.
+        </p>
+
+        <div className="w-full space-y-3 z-10">
+          <button
+            onClick={handleCreateWalletStep1}
+            className="w-full py-4 bg-white text-black hover:bg-zinc-200 rounded-xl font-bold transition-all active:scale-95 shadow-lg shadow-white/10 flex items-center justify-center gap-2 group"
+          >
+            <WalletIcon className="w-5 h-5" />
+            Create New Wallet
+          </button>
+          <button
+            onClick={handleImportWalletStep1}
+            className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
+          >
+            <ArrowPathIcon className="w-5 h-5" />
+            I have a wallet
+          </button>
         </div>
       </div>
     )
   }
 
+  // Create Wallet View
   if (currentView === 'create') {
+    if (showPasswordCreate) {
+      return (
+        <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col p-6 animate-in slide-in-from-right duration-300">
+          {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+          <button onClick={() => setCurrentView('onboarding')} className="self-start p-2 -ml-2 mb-4 hover:bg-white/5 rounded-full transition-colors">
+            <ArrowLeftIcon className="w-6 h-6 text-zinc-400" />
+          </button>
+
+          <h1 className="text-2xl font-bold mb-2">Set Password</h1>
+          <p className="text-zinc-400 text-sm mb-8">This password will be used to unlock your wallet on this device.</p>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-zinc-500 ml-1 mb-1 block">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 ml-1 mb-1 block">Confirm Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          <div className="mt-auto">
+            <button
+              onClick={handleCreateWallet}
+              disabled={loading || !password || !confirmPassword}
+              className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+            >
+              {loading ? <ArrowPathIcon className="w-5 h-5 animate-spin" /> : 'Continue'}
+            </button>
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col p-6 animate-in slide-in-from-right duration-300">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-
-        <div className="flex items-center mb-8">
-          <button onClick={() => setCurrentView('onboarding')} className="p-2 -ml-2 hover:bg-zinc-800/50 rounded-full transition-colors">
-            <ArrowLeftIcon className="w-5 h-5" />
-          </button>
-          <h2 className="text-lg font-bold ml-2">Secret Recovery Phrase</h2>
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold">Secret Phrase</h1>
         </div>
 
-        <div className="flex-1 overflow-y-auto no-scrollbar">
-          <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl mb-6 backdrop-blur-sm">
-            <p className="text-amber-500 text-xs font-medium flex gap-2 leading-relaxed">
-              <span className="text-lg">⚠️</span>
-              Write down these 12 words and keep them safe. Do not share them with anyone.
-            </p>
-          </div>
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 mb-6">
+          <p className="text-amber-400 text-xs leading-relaxed">
+            Write down these 12 words and keep them safe. You will need them to recover your wallet.
+          </p>
+        </div>
 
-          <div className="grid grid-cols-3 gap-2 mb-8">
-            {mnemonic.split(' ').map((word, index) => (
-              <div key={index} className="bg-zinc-900/50 border border-white/5 rounded-lg p-2.5 flex items-center gap-2 hover:border-indigo-500/30 transition-colors group">
-                <span className="text-zinc-600 text-xs w-4 group-hover:text-indigo-500/50 transition-colors">{index + 1}</span>
-                <span className="text-sm font-medium text-zinc-200">{word}</span>
-              </div>
-            ))}
-          </div>
+        <div className="grid grid-cols-3 gap-2 mb-8">
+          {mnemonic.split(' ').map((word, i) => (
+            <div key={i} className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-2 flex items-center gap-2">
+              <span className="text-zinc-600 text-xs font-mono w-4">{i + 1}</span>
+              <span className="text-sm font-medium">{word}</span>
+            </div>
+          ))}
+        </div>
 
+        <div className="mt-auto space-y-3">
           <button
-            onClick={() => {
-              navigator.clipboard.writeText(mnemonic)
-              showToast('Copied to clipboard', 'success')
-            }}
+            onClick={() => handleCopy(mnemonic)}
             className="w-full py-3 flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-sm font-medium transition-colors mb-4 border border-white/5"
           >
             <ClipboardIcon className="w-4 h-4 text-zinc-400" />
@@ -386,42 +543,239 @@ function App() {
     )
   }
 
+  // Import Wallet View
   if (currentView === 'import') {
+    if (showPasswordCreate) {
+      return (
+        <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col p-6 animate-in slide-in-from-right duration-300">
+          {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+          <button onClick={() => setCurrentView('onboarding')} className="self-start p-2 -ml-2 mb-4 hover:bg-white/5 rounded-full transition-colors">
+            <ArrowLeftIcon className="w-6 h-6 text-zinc-400" />
+          </button>
+
+          <h1 className="text-2xl font-bold mb-2">Set Password</h1>
+          <p className="text-zinc-400 text-sm mb-8">This password will be used to unlock your wallet on this device.</p>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-zinc-500 ml-1 mb-1 block">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-500 ml-1 mb-1 block">Confirm Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          <div className="mt-auto">
+            <button
+              onClick={() => setShowPasswordCreate(false)} // Proceed to mnemonic entry
+              disabled={!password || !confirmPassword || password !== confirmPassword || password.length < 8}
+              className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20"
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col p-6 animate-in slide-in-from-right duration-300">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+        <button onClick={() => setShowPasswordCreate(true)} className="self-start p-2 -ml-2 mb-4 hover:bg-white/5 rounded-full transition-colors">
+          <ArrowLeftIcon className="w-6 h-6 text-zinc-400" />
+        </button>
 
-        <div className="flex items-center mb-8">
-          <button onClick={() => setCurrentView('onboarding')} className="p-2 -ml-2 hover:bg-zinc-800/50 rounded-full transition-colors">
-            <ArrowLeftIcon className="w-5 h-5" />
-          </button>
-          <h2 className="text-lg font-bold ml-2">Import Wallet</h2>
-        </div>
+        <h1 className="text-2xl font-bold mb-2">Import Wallet</h1>
+        <p className="text-zinc-400 text-sm mb-6">Enter your 12-word secret recovery phrase.</p>
 
-        <div className="flex-1">
-          <p className="text-zinc-400 text-sm mb-4 leading-relaxed">
-            Enter your 12-word Secret Recovery Phrase to restore your wallet.
-          </p>
-
-          <textarea
-            value={importPhrase}
-            onChange={(e) => setImportPhrase(e.target.value)}
-            placeholder="Separate each word with a space..."
-            className="w-full h-48 bg-zinc-900/50 border border-white/10 rounded-xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none mb-4 placeholder:text-zinc-600"
-          />
-        </div>
+        <textarea
+          value={importPhrase}
+          onChange={(e) => setImportPhrase(e.target.value)}
+          placeholder="separate each word with a space"
+          className="w-full h-32 bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 text-sm focus:outline-none focus:border-indigo-500 transition-colors resize-none mb-4"
+        />
 
         <button
           onClick={handleImportWallet}
-          className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20"
+          disabled={loading || !importPhrase}
+          className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
         >
-          Import Wallet
+          {loading ? <ArrowPathIcon className="w-5 h-5 animate-spin" /> : 'Import Wallet'}
         </button>
       </div>
     )
   }
 
-  // Existing Views (Main, Send, Receive)
+  // Asset Details View with Chart
+  if (currentView === 'asset-details' && selectedAsset) {
+    const currentPrice = cryptoPrices[selectedAsset];
+    const isPositive = historicalData.length > 0 && currentPrice >= historicalData[0].price;
+
+
+    return (
+      <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col animate-in slide-in-from-right duration-300">
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+        <header className="px-5 py-4 flex items-center justify-between bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-20 border-b border-white/5">
+          <div className="flex items-center gap-3">
+            <button onClick={handleBackToMain} className="p-2 -ml-2 hover:bg-white/5 rounded-full transition-colors">
+              <ArrowLeftIcon className="w-5 h-5 text-zinc-400" />
+            </button>
+            <span className="font-bold text-lg tracking-tight text-white">{selectedAsset}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
+              <span className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider">Live</span>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col">
+          <div className="px-5 pt-6 pb-2">
+            <h1 className="text-3xl font-bold tracking-tighter mb-1 font-mono">
+              ${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </h1>
+            <div className={`flex items-center gap-1.5 text-xs font-medium ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+              <ArrowUpIcon className={`w-3 h-3 ${isPositive ? '' : 'rotate-180'}`} />
+              <span>{timeframe} Change</span>
+            </div>
+          </div>
+
+          {/* Chart Controls */}
+          <div className="px-5 flex gap-2 mb-4">
+            {(['1D', '1W', '1M'] as const).map((tf) => (
+              <button
+                key={tf}
+                onClick={() => handleTimeframeChange(tf)}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${timeframe === tf
+                  ? 'bg-zinc-800 text-white'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'
+                  }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+
+          {/* Chart */}
+          <div className="h-64 w-full relative min-w-0">
+            {chartLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/50 z-10 backdrop-blur-sm">
+                <ArrowPathIcon className="w-6 h-6 animate-spin text-zinc-600" />
+              </div>
+            )}
+
+            {historicalData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                <AreaChart data={historicalData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                  <XAxis
+                    dataKey="timestamp"
+                    tick={{ fontSize: 10, fill: '#52525b' }}
+                    tickFormatter={(ts) => {
+                      const date = new Date(ts);
+                      return timeframe === '1D'
+                        ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                    }}
+                    axisLine={false}
+                    tickLine={false}
+                    minTickGap={40}
+                  />
+                  <YAxis
+                    domain={['auto', 'auto']}
+                    orientation="right"
+                    tick={{ fontSize: 10, fill: '#52525b' }}
+                    tickFormatter={(val) => `$${val.toLocaleString()}`}
+                    axisLine={false}
+                    tickLine={false}
+                    width={50}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(24, 24, 27, 0.9)',
+                      border: '1px solid #27272a',
+                      borderRadius: '8px',
+                      backdropFilter: 'blur(4px)',
+                      padding: '8px 12px'
+                    }}
+                    itemStyle={{ color: '#e4e4e7', fontSize: '12px', fontFamily: 'monospace' }}
+                    labelStyle={{ color: '#a1a1aa', fontSize: '10px', marginBottom: '4px' }}
+                    labelFormatter={(label) => new Date(label).toLocaleString()}
+                    formatter={(value: number) => [`$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 'Price']}
+                    cursor={{ stroke: '#6366f1', strokeWidth: 1, strokeDasharray: '4 4' }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="price"
+                    stroke="#6366f1"
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#colorPrice)"
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-zinc-500">
+                <p className="text-sm">No chart data available</p>
+                <p className="text-xs opacity-50 mt-1">Try a different timeframe</p>
+              </div>
+            )}
+          </div>
+
+          {/* Asset Info */}
+          <div className="flex-1 px-5 py-6 space-y-4 bg-zinc-950 border-t border-white/5">
+            <div className="glass-card p-4 rounded-2xl">
+              <h3 className="text-xs font-medium text-zinc-500 mb-1 uppercase tracking-wider">Your Balance</h3>
+              <div className="flex justify-between items-end">
+                <div>
+                  <div className="text-2xl font-bold text-white font-mono">
+                    {selectedAsset === 'ETH' ? balance.eth : selectedAsset === 'USDC' ? balance.usdc : '0.00125'}
+                    <span className="text-sm text-zinc-500 ml-2 font-sans">{selectedAsset}</span>
+                  </div>
+                  <div className="text-sm text-zinc-400 font-medium mt-1">
+                    ≈ ${(
+                      (selectedAsset === 'ETH' ? parseFloat(balance.eth) : selectedAsset === 'USDC' ? parseFloat(balance.usdc) : 0.00125) * currentPrice
+                    ).toFixed(2)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={handleSend} className="py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 text-sm">
+                Send
+              </button>
+              <button onClick={() => setCurrentView('receive')} className="py-3 bg-zinc-900 hover:bg-zinc-800 border border-white/5 rounded-xl font-semibold transition-all active:scale-95 text-sm">
+                Receive
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Existing Views (Send, Receive)
   if (currentView === 'send') {
     return (
       <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col p-4 animate-in slide-in-from-right duration-300">
@@ -431,10 +785,28 @@ function App() {
           <button onClick={handleBackToMain} className="p-2 -ml-2 hover:bg-zinc-800/50 rounded-full transition-colors">
             <ArrowLeftIcon className="w-5 h-5" />
           </button>
-          <h2 className="text-lg font-bold ml-2">Send ETH</h2>
+          <h2 className="text-lg font-bold ml-2">Send {selectedToken}</h2>
         </div>
 
         <div className="flex-1 space-y-6">
+          {/* Token Selector */}
+          <div className="space-y-2">
+            <label className="text-xs text-zinc-400 ml-1 font-medium">Asset</label>
+            <div className="relative">
+              <select
+                value={selectedToken}
+                onChange={(e) => setSelectedToken(e.target.value as 'ETH' | 'USDC')}
+                className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 appearance-none cursor-pointer"
+              >
+                <option value="ETH">Ethereum (ETH)</option>
+                <option value="USDC">USD Coin (USDC)</option>
+              </select>
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+                <ChevronDownIcon className="w-4 h-4 text-zinc-400" />
+              </div>
+            </div>
+          </div>
+
           <div className="space-y-2">
             <label className="text-xs text-zinc-400 ml-1 font-medium">Recipient Address</label>
             <div className="relative group">
@@ -452,7 +824,7 @@ function App() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs text-zinc-400 ml-1 font-medium">Amount (ETH)</label>
+            <label className="text-xs text-zinc-400 ml-1 font-medium">Amount</label>
             <div className="relative group">
               <input
                 type="number"
@@ -462,13 +834,20 @@ function App() {
                 className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-4 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all group-hover:border-white/20"
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <span className="text-xs font-bold bg-zinc-800 px-2 py-1 rounded text-zinc-300">ETH</span>
+                <span className="text-xs font-bold bg-zinc-800 px-2 py-1 rounded text-zinc-300">{selectedToken}</span>
               </div>
             </div>
             <div className="flex justify-between text-xs px-1">
-              <span className="text-zinc-500">Available: {balance.eth} ETH</span>
+              <span className="text-zinc-500">
+                Available: {selectedToken === 'ETH' ? balance.eth : balance.usdc} {selectedToken}
+              </span>
               <button
-                onClick={() => setSendAmount((parseFloat(balance.eth) - 0.001).toFixed(4))}
+                onClick={() => {
+                  const max = selectedToken === 'ETH'
+                    ? (parseFloat(balance.eth) - 0.001).toFixed(4)
+                    : balance.usdc
+                  setSendAmount(max)
+                }}
                 className="text-indigo-400 hover:text-indigo-300 font-medium"
               >
                 Max
@@ -484,14 +863,14 @@ function App() {
             <div className="flex justify-between text-xs">
               <span className="text-zinc-500">Total</span>
               <span className="text-zinc-300 font-medium font-mono">
-                {sendAmount ? (parseFloat(sendAmount) + 0.000021).toFixed(6) : '0.00'} ETH
+                {sendAmount ? parseFloat(sendAmount).toFixed(6) : '0.00'} {selectedToken}
               </span>
             </div>
           </div>
         </div>
 
         <button
-          onClick={handleSendTransaction}
+          onClick={handleSend}
           disabled={sending}
           className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
         >
@@ -527,7 +906,7 @@ function App() {
 
           <p className="text-zinc-400 text-sm mb-3 font-medium">Your Address</p>
           <button
-            onClick={copyAddress}
+            onClick={() => handleCopy(walletAddress)}
             className="flex items-center gap-3 bg-zinc-900/50 hover:bg-zinc-800/50 border border-white/5 hover:border-white/10 px-5 py-4 rounded-2xl transition-all group w-full max-w-[300px] active:scale-95"
           >
             <span className="text-sm font-mono truncate text-zinc-300 group-hover:text-white transition-colors flex-1 text-center">
@@ -561,7 +940,7 @@ function App() {
           <div className="w-9 h-9 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/10 border border-white/5">
             <img src={logo} alt="Verox" className="w-5 h-5" />
           </div>
-          <span className="font-bold text-lg tracking-tight text-gradient">Verox</span>
+          <span className="font-bold text-lg tracking-tight text-white">Verox</span>
           <div className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
             <span className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider">Sepolia</span>
           </div>
@@ -635,7 +1014,10 @@ function App() {
 
             <div className="space-y-3">
               {/* ETH */}
-              <div className="glass-card p-4 rounded-2xl flex items-center justify-between cursor-pointer group">
+              <div
+                onClick={() => handleAssetClick('ETH')}
+                className="glass-card p-4 rounded-2xl flex items-center justify-between cursor-pointer group"
+              >
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 bg-zinc-800 rounded-full flex items-center justify-center p-2 ring-2 ring-white/5 group-hover:ring-indigo-500/20 transition-all">
                     <img src="https://cryptologos.cc/logos/ethereum-eth-logo.png?v=026" alt="ETH" className="w-full h-full object-contain" />
@@ -651,25 +1033,11 @@ function App() {
                 </div>
               </div>
 
-              {/* BTC (Mock) */}
-              <div className="glass-card p-4 rounded-2xl flex items-center justify-between cursor-pointer group">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-zinc-800 rounded-full flex items-center justify-center p-2 ring-2 ring-white/5 group-hover:ring-orange-500/20 transition-all">
-                    <img src="https://cryptologos.cc/logos/bitcoin-btc-logo.png?v=026" alt="BTC" className="w-full h-full object-contain" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="font-bold text-zinc-100">Bitcoin</span>
-                    <span className="text-xs text-zinc-500 font-medium">BTC</span>
-                  </div>
-                </div>
-                <div className="flex flex-col items-end">
-                  <span className="font-bold text-zinc-100">0.00125</span>
-                  <span className="text-xs text-zinc-500 font-medium">${(0.00125 * cryptoPrices.BTC).toFixed(2)}</span>
-                </div>
-              </div>
-
-              {/* USDC (Mock) */}
-              <div className="glass-card p-4 rounded-2xl flex items-center justify-between cursor-pointer group">
+              {/* USDC (Real) */}
+              <div
+                onClick={() => handleAssetClick('USDC')}
+                className="glass-card p-4 rounded-2xl flex items-center justify-between cursor-pointer group"
+              >
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 bg-zinc-800 rounded-full flex items-center justify-center p-2 ring-2 ring-white/5 group-hover:ring-blue-500/20 transition-all">
                     <img src="https://cryptologos.cc/logos/usd-coin-usdc-logo.png?v=026" alt="USDC" className="w-full h-full object-contain" />
@@ -680,10 +1048,12 @@ function App() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end">
-                  <span className="font-bold text-zinc-100">250.00</span>
-                  <span className="text-xs text-zinc-500 font-medium">$250.00</span>
+                  <span className="font-bold text-zinc-100">{balance.usdc}</span>
+                  <span className="text-xs text-zinc-500 font-medium">${balance.usdc}</span>
                 </div>
               </div>
+
+
             </div>
           </div>
         </div>
