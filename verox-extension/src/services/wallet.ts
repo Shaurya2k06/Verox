@@ -55,10 +55,7 @@ class WalletService {
     this.provider = new ethers.JsonRpcProvider(this.RPC_URL);
   }
 
-  // Helper to get wallet instance (must be unlocked first)
-  private async getWalletInstance(): Promise<ethers.HDNodeWallet | ethers.Wallet | null> {
-    return this.walletInstance;
-  }
+
 
   async hasWallet(): Promise<boolean> {
     return !!localStorage.getItem(this.STORAGE_KEYS.ENCRYPTED_WALLET);

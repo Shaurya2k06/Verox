@@ -18,7 +18,10 @@ import {
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid } from 'recharts'
 import { walletService } from './services/wallet'
 import { priceService, type CryptoPrices, type PricePoint } from './services/price'
-import logo from './assets/logo.png'
+import logo from './assets/logo-new.png'
+import { Button } from './components/Button'
+import { SlideToPay } from './components/SlideToPay'
+import { biometricService } from './services/biometric'
 
 // Sepolia USDC Address
 const SEPOLIA_USDC_ADDRESS = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238';
@@ -77,6 +80,7 @@ function App() {
   const [unlockPassword, setUnlockPassword] = useState('')
   const [isLocked, setIsLocked] = useState(false)
   const [showPasswordCreate, setShowPasswordCreate] = useState(false)
+  const [biometricsAvailable, setBiometricsAvailable] = useState(false)
 
   // Chart State
   const [selectedAsset, setSelectedAsset] = useState<'ETH' | 'BTC' | 'USDC' | null>(null)
@@ -104,7 +108,13 @@ function App() {
 
   useEffect(() => {
     initializeApp()
+    checkBiometrics()
   }, [])
+
+  const checkBiometrics = async () => {
+    const available = await biometricService.isAvailable()
+    setBiometricsAvailable(available)
+  }
 
   useEffect(() => {
     if (currentView === 'receive' && !qrCodeUrl) {
@@ -137,6 +147,13 @@ function App() {
       if (hasWallet) {
         setIsLocked(true)
         setCurrentView('main') // Will show unlock screen overlay
+
+        // Auto-trigger biometric if available and enabled
+        const storedBioKey = localStorage.getItem('verox_bio_key')
+        if (storedBioKey && await biometricService.isAvailable()) {
+          // Optional: Auto-prompt
+          // handleBiometricUnlock() 
+        }
       } else {
         setCurrentView('onboarding')
       }
@@ -145,6 +162,30 @@ function App() {
       showToast('Failed to initialize wallet', 'error')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleBiometricUnlock = async () => {
+    const storedBioKey = localStorage.getItem('verox_bio_key')
+    if (!storedBioKey) return
+
+    try {
+      const verified = await biometricService.authenticate()
+      if (verified) {
+        const password = atob(storedBioKey)
+        setUnlockPassword(password) // Fill for UI feedback
+        const result = await walletService.unlockWalletWithPassword(password)
+        if (result.success && result.data) {
+          setWalletAddress(result.data.address)
+          await loadWalletData(result.data.address)
+          setIsLocked(false)
+          setUnlockPassword('')
+        } else {
+          showToast('Biometric unlock failed: Invalid password', 'error')
+        }
+      }
+    } catch (error) {
+      console.error('Biometric unlock error:', error)
     }
   }
 
@@ -238,6 +279,13 @@ function App() {
         setWalletAddress(result.data.address)
         setBalance({ eth: '0.000000', usd: '0.00', usdc: '0.00' })
         setShowPasswordCreate(false)
+
+        // Enable biometrics by default if available
+        if (await biometricService.isAvailable()) {
+          await biometricService.register('user') // Register dummy user
+          localStorage.setItem('verox_bio_key', btoa(password))
+          showToast('Biometric login enabled', 'success')
+        }
         // Stay on 'create' view to show mnemonic
       } else {
         showToast(result.error || 'Failed to create wallet', 'error')
@@ -278,6 +326,14 @@ function App() {
         setShowPasswordCreate(false)
         setPassword('')
         setConfirmPassword('')
+
+        // Enable biometrics by default if available
+        if (await biometricService.isAvailable()) {
+          await biometricService.register('user')
+          localStorage.setItem('verox_bio_key', btoa(password))
+          showToast('Biometric login enabled', 'success')
+        }
+
         showToast('Wallet imported successfully', 'success')
       } else {
         showToast(result.error || 'Invalid recovery phrase', 'error')
@@ -380,6 +436,29 @@ function App() {
         <p className="text-zinc-400 text-sm mb-8">Enter your password to unlock</p>
 
         <div className="w-full space-y-4">
+          {biometricsAvailable && localStorage.getItem('verox_bio_key') && (
+            <button
+              onClick={handleBiometricUnlock}
+              className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 border border-indigo-500/30 rounded-xl font-semibold transition-all active:scale-95 flex items-center justify-center gap-2 group mb-2"
+            >
+              <div className="p-1 bg-indigo-500/10 rounded-full group-hover:bg-indigo-500/20">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-indigo-400">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.875 14.25l1.214 1.942a2.25 2.25 0 001.908 1.058h2.006c.776 0 1.497-.4 1.908-1.058l1.214-1.942M2.41 9a2.25 2.25 0 012.134-1.548l.6 2.405 1.718-1.486a2.25 2.25 0 012.579-.33l1.156.81 1.156-.81a2.25 2.25 0 012.579.33l1.718 1.486.6-2.405a2.25 2.25 0 012.134 1.548A2.25 2.25 0 0021.75 10.5v.886c0 1.105-.895 2-2 2h-2c-.963 0-1.781.729-1.966 1.675a3.752 3.752 0 01-3.033 3.033c-.946.185-1.675 1.003-1.675 1.966v.375c0 .414-.336.75-.75.75h-1.5a.75.75 0 01-.75-.75v-.375c0-.963-.729-1.781-1.675-1.966a3.752 3.752 0 01-3.033-3.033c-.185-.946-1.003-1.675-1.966-1.675h-2a2 2 0 01-2-2v-.886a2.25 2.25 0 00-1.59-2.134z" />
+                </svg>
+              </div>
+              <span>Log in with Touch ID</span>
+            </button>
+          )}
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-zinc-800"></div>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-zinc-950 px-2 text-zinc-500">Or use password</span>
+            </div>
+          </div>
+
           <input
             type="password"
             value={unlockPassword}
@@ -388,13 +467,15 @@ function App() {
             className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
             onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
           />
-          <button
+          <Button
             onClick={handleUnlock}
             disabled={loading || !unlockPassword}
-            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+            isLoading={loading}
+            variant="secondary"
+            className="w-full"
           >
-            {loading ? <ArrowPathIcon className="w-5 h-5 animate-spin" /> : 'Unlock Wallet'}
-          </button>
+            Unlock
+          </Button>
         </div>
 
         <button
@@ -762,12 +843,12 @@ function App() {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={handleSend} className="py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 text-sm">
+              <Button onClick={() => setCurrentView('send')} variant="primary">
                 Send
-              </button>
-              <button onClick={() => setCurrentView('receive')} className="py-3 bg-zinc-900 hover:bg-zinc-800 border border-white/5 rounded-xl font-semibold transition-all active:scale-95 text-sm">
+              </Button>
+              <Button onClick={() => setCurrentView('receive')} variant="secondary">
                 Receive
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -869,20 +950,16 @@ function App() {
           </div>
         </div>
 
-        <button
-          onClick={handleSend}
-          disabled={sending}
-          className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 rounded-xl font-semibold transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
-        >
-          {sending ? (
-            <>
-              <ArrowPathIcon className="w-5 h-5 animate-spin" />
-              Sending...
-            </>
-          ) : (
-            'Confirm Send'
-          )}
-        </button>
+        <div className="mt-auto mb-4">
+          <SlideToPay
+            onConfirm={async () => {
+              await handleSend()
+            }}
+            amount={sendAmount}
+            token={selectedToken}
+            disabled={sending || !sendAmount || !sendAddress}
+          />
+        </div>
       </div>
     )
   }
@@ -937,13 +1014,10 @@ function App() {
       {/* Header */}
       <header className="px-5 py-4 flex items-center justify-between bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-20 border-b border-white/5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/10 border border-white/5">
-            <img src={logo} alt="Verox" className="w-5 h-5" />
+          <div className="w-9 h-9 bg-zinc-900/50 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/10 border border-white/5 backdrop-blur-md">
+            <img src={logo} alt="Verox" className="w-6 h-6 object-contain" />
           </div>
           <span className="font-bold text-lg tracking-tight text-white">Verox</span>
-          <div className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
-            <span className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider">Sepolia</span>
-          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -973,7 +1047,7 @@ function App() {
 
           {/* Action Buttons */}
           <div className="grid grid-cols-4 gap-4 w-full mb-10 px-2">
-            <button onClick={handleSend} className="flex flex-col items-center gap-2 group">
+            <button onClick={() => setCurrentView('send')} className="flex flex-col items-center gap-2 group">
               <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/25 group-hover:scale-105 group-hover:bg-indigo-500 transition-all duration-300">
                 <ArrowUpIcon className="w-6 h-6 rotate-45 text-white" />
               </div>
@@ -1060,7 +1134,8 @@ function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <div className="absolute bottom-0 left-0 w-full bg-zinc-950/80 backdrop-blur-xl border-t border-white/5 px-8 py-4 flex justify-between items-center z-20">
+      {/* Bottom Navigation */}
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border-t border-white/5 px-8 py-4 flex justify-between items-center z-20 mt-auto">
         <button className="flex flex-col items-center gap-1.5 text-indigo-400 group">
           <div className="w-10 h-8 flex items-center justify-center bg-indigo-500/10 rounded-full group-hover:bg-indigo-500/20 transition-colors">
             <HomeIcon className="w-6 h-6" />
