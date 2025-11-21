@@ -2,9 +2,7 @@
 @import "tw-animate-css";
 
 @layer base {
-  body {
-    @apply bg-zinc-950 text-zinc-50;
-  }
+  /* Base styles moved to index.css */
 }
 
 /* Custom Scrollbar */
