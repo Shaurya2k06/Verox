@@ -28,12 +28,7 @@ class PriceService {
     USDC: 'eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a'
   };
 
-  // Pyth Benchmarks Symbols
-  private readonly BENCHMARK_SYMBOLS = {
-    ETH: 'Crypto.ETH/USD',
-    BTC: 'Crypto.BTC/USD',
-    USDC: 'Crypto.USDC/USD'
-  };
+
 
   async getCurrentPrices(): Promise<CryptoPrices> {
     const now = Date.now();
@@ -125,37 +120,26 @@ class PriceService {
 
   async getHistoricalPrices(symbol: 'ETH' | 'BTC' | 'USDC', range: '1D' | '1W' | '1M' = '1D'): Promise<PricePoint[]> {
     try {
-      const pythSymbol = this.BENCHMARK_SYMBOLS[symbol];
-      const to = Math.floor(Date.now() / 1000);
-      let from = to;
-      let resolution = '60';
+      const coinId = symbol === 'ETH' ? 'ethereum' : symbol === 'BTC' ? 'bitcoin' : 'usd-coin';
+      let days = '1';
 
       switch (range) {
-        case '1D':
-          from = to - 24 * 60 * 60;
-          resolution = '15'; // 15 min candles
-          break;
-        case '1W':
-          from = to - 7 * 24 * 60 * 60;
-          resolution = '60'; // 1 hour candles
-          break;
-        case '1M':
-          from = to - 30 * 24 * 60 * 60;
-          resolution = '240'; // 4 hour candles
-          break;
+        case '1D': days = '1'; break;
+        case '1W': days = '7'; break;
+        case '1M': days = '30'; break;
       }
 
-      const url = `https://benchmarks.pyth.network/v1/shim/tradingview/history?symbol=${pythSymbol}&resolution=${resolution}&from=${from}&to=${to}`;
+      const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`;
 
       const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch historical data');
 
       const data = await response.json();
 
-      if (data.s === 'ok' && data.t && data.c) {
-        return data.t.map((timestamp: number, index: number) => ({
-          timestamp: timestamp * 1000,
-          price: data.c[index]
+      if (data.prices && Array.isArray(data.prices)) {
+        return data.prices.map((item: [number, number]) => ({
+          timestamp: item[0],
+          price: item[1]
         }));
       }
 

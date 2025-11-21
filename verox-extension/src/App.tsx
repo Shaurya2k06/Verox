@@ -1,24 +1,21 @@
 import { useState, useEffect } from 'react'
+import { ethers } from 'ethers'
 import QRCode from 'qrcode'
 import {
-  ClipboardIcon,
-  CheckCircleIcon,
-  ArrowPathIcon,
-  CurrencyDollarIcon,
-  ArrowLeftIcon,
-  ArrowUpIcon,
-  ArrowsRightLeftIcon,
-  MagnifyingGlassIcon,
-  XMarkIcon,
   HomeIcon,
-  Cog6ToothIcon,
   WalletIcon,
-  ChevronDownIcon
+  ChevronDownIcon,
+  XMarkIcon,
+  ArrowPathIcon,
+  ArrowLeftIcon,
+  ClipboardIcon,
+  ArrowUpIcon,
+  MagnifyingGlassIcon,
+  CheckCircleIcon
 } from '@heroicons/react/24/outline'
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid } from 'recharts'
 import { walletService } from './services/wallet'
 import { priceService, type CryptoPrices, type PricePoint } from './services/price'
-import logo from './assets/logo-new.png'
 import { Button } from './components/Button'
 import { SlideToPay } from './components/SlideToPay'
 import { biometricService } from './services/biometric'
@@ -417,7 +414,7 @@ function App() {
       <div className="w-[360px] h-[600px] bg-zinc-950 text-white flex flex-col items-center justify-center">
         <div className="relative">
           <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse"></div>
-          <img src={logo} alt="Verox" className="w-16 h-16 relative z-10 animate-bounce" />
+          <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse"></div>
         </div>
       </div>
     )
@@ -430,7 +427,6 @@ function App() {
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         <div className="w-20 h-20 mb-6 relative">
           <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse"></div>
-          <img src={logo} alt="Verox" className="w-full h-full object-contain relative z-10" />
         </div>
         <h1 className="text-2xl font-bold mb-2">Welcome Back</h1>
         <p className="text-zinc-400 text-sm mb-8">Enter your password to unlock</p>
@@ -507,7 +503,6 @@ function App() {
 
         <div className="w-24 h-24 mb-8 relative">
           <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse"></div>
-          <img src={logo} alt="Verox" className="w-full h-full object-contain relative z-10" />
         </div>
 
         <h1 className="text-4xl font-bold tracking-tighter mb-2 bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">Verox</h1>
@@ -896,7 +891,8 @@ function App() {
                 value={sendAddress}
                 onChange={(e) => setSendAddress(e.target.value)}
                 placeholder="0x..."
-                className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-4 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all group-hover:border-white/20"
+                className={`w-full bg-zinc-900/50 border rounded-xl p-4 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all ${sendAddress && !ethers.isAddress(sendAddress) ? 'border-red-500/50' : 'border-white/10 group-hover:border-white/20'
+                  }`}
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500">
                 <MagnifyingGlassIcon className="w-5 h-5" />
@@ -910,7 +906,12 @@ function App() {
               <input
                 type="number"
                 value={sendAmount}
-                onChange={(e) => setSendAmount(e.target.value)}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  if (val < 0) return;
+                  setSendAmount(e.target.value);
+                }}
+                min="0"
                 placeholder="0.00"
                 className="w-full bg-zinc-900/50 border border-white/10 rounded-xl p-4 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all group-hover:border-white/20"
               />
@@ -925,7 +926,7 @@ function App() {
               <button
                 onClick={() => {
                   const max = selectedToken === 'ETH'
-                    ? (parseFloat(balance.eth) - 0.001).toFixed(4)
+                    ? Math.max(0, parseFloat(balance.eth) - 0.001).toFixed(4)
                     : balance.usdc
                   setSendAmount(max)
                 }}
@@ -957,7 +958,7 @@ function App() {
             }}
             amount={sendAmount}
             token={selectedToken}
-            disabled={sending || !sendAmount || !sendAddress}
+            disabled={sending || !sendAmount || !sendAddress || !ethers.isAddress(sendAddress) || parseFloat(sendAmount) <= 0}
           />
         </div>
       </div>
@@ -1014,9 +1015,6 @@ function App() {
       {/* Header */}
       <header className="px-5 py-4 flex items-center justify-between bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-20 border-b border-white/5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-zinc-900/50 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/10 border border-white/5 backdrop-blur-md">
-            <img src={logo} alt="Verox" className="w-6 h-6 object-contain" />
-          </div>
           <span className="font-bold text-lg tracking-tight text-white">Verox</span>
         </div>
         <div className="flex items-center gap-2">
@@ -1045,39 +1043,15 @@ function App() {
             <span>+2.45%</span>
           </div>
 
-          {/* Action Buttons */}
-          <div className="grid grid-cols-4 gap-4 w-full mb-10 px-2">
-            <button onClick={() => setCurrentView('send')} className="flex flex-col items-center gap-2 group">
-              <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/25 group-hover:scale-105 group-hover:bg-indigo-500 transition-all duration-300">
-                <ArrowUpIcon className="w-6 h-6 rotate-45 text-white" />
-              </div>
-              <span className="text-xs font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors">Send</span>
-            </button>
-            <button onClick={() => setCurrentView('receive')} className="flex flex-col items-center gap-2 group">
-              <div className="w-14 h-14 bg-zinc-900 border border-white/5 rounded-2xl flex items-center justify-center group-hover:bg-zinc-800 group-hover:border-white/10 transition-all duration-300">
-                <ArrowUpIcon className="w-6 h-6 rotate-[225deg] text-zinc-300 group-hover:text-white" />
-              </div>
-              <span className="text-xs font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors">Receive</span>
-            </button>
-            <button
-              onClick={() => showToast('Swap feature coming soon!', 'info')}
-              className="flex flex-col items-center gap-2 group"
-            >
-              <div className="w-14 h-14 bg-zinc-900 border border-white/5 rounded-2xl flex items-center justify-center group-hover:bg-zinc-800 group-hover:border-white/10 transition-all duration-300">
-                <ArrowsRightLeftIcon className="w-6 h-6 text-zinc-300 group-hover:text-white" />
-              </div>
-              <span className="text-xs font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors">Swap</span>
-            </button>
-            <button
-              onClick={() => showToast('Buy feature coming soon!', 'info')}
-              className="flex flex-col items-center gap-2 group"
-            >
-              <div className="w-14 h-14 bg-zinc-900 border border-white/5 rounded-2xl flex items-center justify-center group-hover:bg-zinc-800 group-hover:border-white/10 transition-all duration-300">
-                <CurrencyDollarIcon className="w-6 h-6 text-zinc-300 group-hover:text-white" />
-              </div>
-              <span className="text-xs font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors">Buy</span>
-            </button>
-          </div>
+          <button
+            onClick={() => handleCopy(walletAddress)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900/50 hover:bg-zinc-800/50 rounded-full border border-white/5 transition-all active:scale-95 mb-8"
+          >
+            <span className="text-xs text-zinc-400 font-mono">{walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}</span>
+            {copied ? <CheckCircleIcon className="w-3 h-3 text-emerald-500" /> : <ClipboardIcon className="w-3 h-3 text-zinc-500" />}
+          </button>
+
+
 
           {/* Assets List */}
           <div className="w-full px-1">
@@ -1136,25 +1110,34 @@ function App() {
       {/* Bottom Navigation */}
       {/* Bottom Navigation */}
       <div className="w-full bg-zinc-950/80 backdrop-blur-xl border-t border-white/5 px-8 py-4 flex justify-between items-center z-20 mt-auto">
-        <button className="flex flex-col items-center gap-1.5 text-indigo-400 group">
-          <div className="w-10 h-8 flex items-center justify-center bg-indigo-500/10 rounded-full group-hover:bg-indigo-500/20 transition-colors">
+        <button
+          onClick={() => setCurrentView('main')}
+          className={`flex flex-col items-center gap-1.5 group ${currentView === 'main' ? 'text-indigo-400' : 'text-zinc-600 hover:text-zinc-300'}`}
+        >
+          <div className={`w-10 h-8 flex items-center justify-center rounded-full transition-colors ${currentView === 'main' ? 'bg-indigo-500/10' : 'group-hover:bg-white/5'}`}>
             <HomeIcon className="w-6 h-6" />
           </div>
           <span className="text-[10px] font-semibold">Home</span>
         </button>
+
         <button
-          onClick={async () => {
-            if (confirm('Are you sure you want to reset your wallet? This will create a new address.')) {
-              await walletService.resetWallet()
-              window.location.reload()
-            }
-          }}
-          className="flex flex-col items-center gap-1.5 text-zinc-600 hover:text-zinc-300 transition-colors group"
+          onClick={() => setCurrentView('send')}
+          className="flex flex-col items-center gap-1.5 group text-zinc-600 hover:text-zinc-300"
         >
-          <div className="w-10 h-8 flex items-center justify-center group-hover:bg-white/5 rounded-full transition-colors">
-            <Cog6ToothIcon className="w-6 h-6" />
+          <div className="w-10 h-8 flex items-center justify-center rounded-full transition-colors group-hover:bg-white/5">
+            <ArrowUpIcon className="w-6 h-6 rotate-45" />
           </div>
-          <span className="text-[10px] font-medium">Reset</span>
+          <span className="text-[10px] font-semibold">Send</span>
+        </button>
+
+        <button
+          onClick={() => setCurrentView('receive')}
+          className="flex flex-col items-center gap-1.5 group text-zinc-600 hover:text-zinc-300"
+        >
+          <div className="w-10 h-8 flex items-center justify-center rounded-full transition-colors group-hover:bg-white/5">
+            <ArrowUpIcon className="w-6 h-6 rotate-[225deg]" />
+          </div>
+          <span className="text-[10px] font-semibold">Receive</span>
         </button>
       </div>
     </div>
